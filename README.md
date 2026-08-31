@@ -78,4 +78,7 @@ Not built or deployed by proxyctl. Copy it to a node by hand if you want it ther
 - Moving a hop onto a mesh VPN is an address change in `topology.json`, not a code
   change. Measured on the HK→TY→CHI chain, public IPv4 and Tailscale differed by
   1.1 ms total, so the default is public IPv4 with no VPN dependency.
-- Egress IP quality matters: Hypixel blocks flagged datacenter ranges.
+- Egress IP quality matters: Hypixel blocks flagged datacenter ranges. Don't probe the
+  backend from an egress node either (pings, status queries, benchmark loops); test
+  from your own machine, and treat the egress IP as something you can't easily
+  replace.
