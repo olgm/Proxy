@@ -1,0 +1,22 @@
+{
+  "user": "proxyd",
+  "base_port": 9000,
+  "nodes": {
+    "hk":  {"ssh": "root@ingress.example.com",  "addr": "198.51.100.10"},
+    "ty":  {"ssh": "root@relay.example.com", "addr": "198.51.100.20"},
+    "chi": {"ssh": "root@egress.example.com",            "addr": "198.51.100.30"}
+  },
+  "routes": [
+    {
+      "name": "hypixel",
+      "entry": "hk",
+      "port": 25565,
+      "via": ["ty", "chi"],
+      "target": {
+        "addr": "mc.hypixel.net:25565",
+        "rewrite_host": "mc.hypixel.net",
+        "rewrite_port": 25565
+      }
+    }
+  ]
+}
