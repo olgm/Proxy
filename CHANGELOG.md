@@ -15,4 +15,4 @@
   deploy path; build and copy it by hand.
 - Verified HK → Tokyo → Chicago → Hypixel: status ping returns Hypixel's MOTD while
   the client claims an unrelated hostname, and all three hops appear in the socket
-  table.
+  table. Real client login through the chain confirmed working.
