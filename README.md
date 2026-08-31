@@ -59,6 +59,18 @@ ufw allow 25565/tcp                                       # entry node
 ufw allow from <prev-hop-ip> to any port <hop> proto tcp  # every other node
 ```
 
+## Verify
+
+`tools/mcping` sends a status ping and prints the MOTD. It claims a wrong hostname by
+default, so a reply proves the ingress rewrote the address rather than the client
+having asked for the right thing:
+
+```sh
+go run ./tools/mcping <entry-ip>:25565
+```
+
+Not built or deployed by proxyctl. Copy it to a node by hand if you want it there.
+
 ## Notes
 
 - Relays enforce a source-IP allowlist in-binary. Without it a relay is an open proxy

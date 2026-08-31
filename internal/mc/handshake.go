@@ -139,6 +139,10 @@ func (h *Handshake) Encode() []byte {
 	return append(appendVarInt(nil, int32(len(body))), body...)
 }
 
+// ReadVarInt reads one VarInt. Exported for tools/mcping, which parses a status
+// response; proxyd itself never needs it outside this package.
+func ReadVarInt(r io.ByteReader) (int32, error) { return readVarInt(r) }
+
 func readVarInt(r io.ByteReader) (int32, error) {
 	var v uint32
 	for i := 0; i < maxVarIntLen; i++ {

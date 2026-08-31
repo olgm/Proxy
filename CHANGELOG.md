@@ -11,6 +11,8 @@
 - `proxyctl deploy` verifies every link after installing, probes the target's
   firewall when one is blocked, and offers to open exactly that port. Never edits a
   firewall without being asked.
+- `tools/mcping`: status-ping client for checking a chain end to end. Outside the
+  deploy path; build and copy it by hand.
 - Verified HK → Tokyo → Chicago → Hypixel: status ping returns Hypixel's MOTD while
   the client claims an unrelated hostname, and all three hops appear in the socket
   table.
