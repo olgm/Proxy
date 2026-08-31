@@ -69,20 +69,20 @@ func main() {
 	fs.Parse(os.Args[2:])
 
 	t, err := load(*file)
-	check(err)
-	cfgs, err := expand(t)
-	check(err)
+	fail(err)
+	cfgs, checks, err := expand(t)
+	fail(err)
 
 	switch cmd {
 	case "config":
 		printConfigs(t, cfgs)
 	case "deploy":
 		printConfigs(t, cfgs)
-		check(deploy(t, cfgs, *repo))
+		fail(deploy(t, cfgs, checks, *repo))
 	case "status":
-		check(status(t))
+		fail(status(t))
 	case "uninstall":
-		check(uninstall(t))
+		fail(uninstall(t))
 	default:
 		usage()
 		os.Exit(2)
@@ -99,7 +99,7 @@ func usage() {
 `)
 }
 
-func check(err error) {
+func fail(err error) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "proxyctl:", err)
 		os.Exit(1)
@@ -136,26 +136,29 @@ func load(path string) (*Topology, error) {
 }
 
 // expand turns the operator-facing topology into one config per node. Hop ports are
-// allocated here so they never have to be kept in sync by hand.
-func expand(t *Topology) (map[string]*proxy.Config, error) {
+// allocated here so they never have to be kept in sync by hand. It also emits the
+// reachability checks implied by the chain, so a deploy can tell the operator which
+// links are blocked instead of leaving them to discover it with a client.
+func expand(t *Topology) (map[string]*proxy.Config, []check, error) {
 	cfgs := map[string]*proxy.Config{}
+	var checks []check
 	next := t.BasePort
 
 	for _, r := range t.Routes {
 		if r.Target.Addr == "" {
-			return nil, fmt.Errorf("route %q: target.addr is required", r.Name)
+			return nil, nil, fmt.Errorf("route %q: target.addr is required", r.Name)
 		}
 		if r.Port == 0 {
-			return nil, fmt.Errorf("route %q: port is required", r.Name)
+			return nil, nil, fmt.Errorf("route %q: port is required", r.Name)
 		}
 		chain := append([]string{r.Entry}, r.Via...)
 		seen := map[string]bool{}
 		for _, n := range chain {
 			if _, ok := t.Nodes[n]; !ok {
-				return nil, fmt.Errorf("route %q: unknown node %q", r.Name, n)
+				return nil, nil, fmt.Errorf("route %q: unknown node %q", r.Name, n)
 			}
 			if seen[n] {
-				return nil, fmt.Errorf("route %q: node %q appears twice in the chain", r.Name, n)
+				return nil, nil, fmt.Errorf("route %q: node %q appears twice in the chain", r.Name, n)
 			}
 			seen[n] = true
 		}
@@ -190,9 +193,17 @@ func expand(t *Topology) (map[string]*proxy.Config, error) {
 				cfgs[name] = &proxy.Config{}
 			}
 			cfgs[name].Listeners = append(cfgs[name].Listeners, l)
+
+			if i == 0 {
+				checks = append(checks, check{to: name, why: "entry", port: ports[i],
+					addr: net.JoinHostPort(node.Addr, strconv.Itoa(ports[i]))})
+			} else {
+				checks = append(checks, check{from: chain[i-1], to: name, why: "hop", port: ports[i],
+					addr: net.JoinHostPort(node.Addr, strconv.Itoa(ports[i]))})
+			}
 		}
 	}
-	return cfgs, nil
+	return cfgs, checks, nil
 }
 
 func bindAddr(addr string, port int) string {
@@ -234,8 +245,9 @@ func marshal(c *proxy.Config) []byte {
 	return append(b, '\n')
 }
 
-func deploy(t *Topology, cfgs map[string]*proxy.Config, repo string) error {
+func deploy(t *Topology, cfgs map[string]*proxy.Config, checks []check, repo string) error {
 	built := map[string]string{} // goarch -> local binary path
+	roots := map[string]bool{}   // node -> already root over ssh
 	tmp, err := os.MkdirTemp("", "proxyctl")
 	if err != nil {
 		return err
@@ -250,6 +262,7 @@ func deploy(t *Topology, cfgs map[string]*proxy.Config, repo string) error {
 		if err != nil {
 			return fmt.Errorf("%s: %w", name, err)
 		}
+		roots[name] = root
 		fmt.Printf("   probe    arch=%s root=%v\n", arch, root)
 
 		bin, ok := built[arch]
@@ -278,7 +291,7 @@ func deploy(t *Topology, cfgs map[string]*proxy.Config, repo string) error {
 		}
 		fmt.Printf("   install  %s", lastLines(out, 2))
 	}
-	return nil
+	return verify(t, checks, roots)
 }
 
 // probe reports the node's architecture and whether we are already root, so the

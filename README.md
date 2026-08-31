@@ -46,7 +46,12 @@ Hop ports are allocated automatically. `config` prints the map.
 
 ## Firewall
 
-Not managed by proxyctl. Open the entry port publicly, and each hop port from the
+After deploy, proxyctl tests every link from the side that will really dial it and
+reports which are blocked. When a firewall is the cause it prints the exact rule and
+asks before applying it; with no terminal attached it only prints. It never edits a
+firewall unprompted.
+
+The rules are one public port on the entry node, and each hop port opened to the
 previous hop only:
 
 ```sh
