@@ -10,7 +10,29 @@ import (
 const (
 	notchUUID = "069a79f4-44e9-4726-a5be-fca90e38aaf5"
 	alexUUID  = "853c80ef-3c37-49fd-aa49-938b674adae6"
+	testIP    = "198.51.100.7"
 )
+
+// fakeMojang stands in for the profile API. names maps a UUID to the name it
+// answers to now; owners maps a name to the UUID holding it.
+type fakeMojang struct {
+	names   map[string]string
+	owners  map[string]string
+	nameFor int // calls to NameFor
+	uuidFor int // calls to UUIDFor
+}
+
+func (f *fakeMojang) NameFor(uuid string) (string, bool) {
+	f.nameFor++
+	n, ok := f.names[normalize(uuid)]
+	return n, ok
+}
+
+func (f *fakeMojang) UUIDFor(name, ip string) (string, bool) {
+	f.uuidFor++
+	u, ok := f.owners[strings.ToLower(name)]
+	return u, ok
+}
 
 func write(t *testing.T, body string) string {
 	t.Helper()
@@ -23,8 +45,13 @@ func write(t *testing.T, body string) string {
 
 func open(t *testing.T, body string) (*List, string) {
 	t.Helper()
+	return openWith(t, body, nil)
+}
+
+func openWith(t *testing.T, body string, mj Mojang) (*List, string) {
+	t.Helper()
 	p := write(t, body)
-	l, err := Open(p)
+	l, err := Open(p, mj)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +78,7 @@ func TestCheck(t *testing.T) {
 		{"listed ign, unlisted uuid", "Alex", "11111111-2222-3333-4444-555555555555", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := l.Check(tc.ign, tc.uuid); got != tc.want {
+			if got := l.Check(tc.ign, tc.uuid, testIP); got != tc.want {
 				t.Fatalf("Check(%q, %q) = %v, want %v", tc.ign, tc.uuid, got, tc.want)
 			}
 		})
@@ -60,7 +87,7 @@ func TestCheck(t *testing.T) {
 
 func TestEmptyListDeniesEveryone(t *testing.T) {
 	l, _ := open(t, "# nobody yet\n")
-	if l.Check("Notch", notchUUID) || l.Check("Notch", "") {
+	if l.Check("Notch", notchUUID, testIP) || l.Check("Notch", "", testIP) {
 		t.Fatal("empty list let someone in")
 	}
 	if l.Len() != 0 {
@@ -73,7 +100,7 @@ func TestEmptyListDeniesEveryone(t *testing.T) {
 func TestRenameRewritesFile(t *testing.T) {
 	l, p := open(t, "# friends\nNotch:"+notchUUID+"\nAlex:"+alexUUID+"\n")
 
-	if !l.Check("Notch2", notchUUID) {
+	if !l.Check("Notch2", notchUUID, testIP) {
 		t.Fatal("rename should still match on uuid")
 	}
 	b, err := os.ReadFile(p)
@@ -85,10 +112,10 @@ func TestRenameRewritesFile(t *testing.T) {
 		t.Fatalf("file is\n%q\nwant\n%q", b, want)
 	}
 	// The new name works on a client too old to send a UUID; the old one does not.
-	if !l.Check("Notch2", "") {
+	if !l.Check("Notch2", "", testIP) {
 		t.Error("renamed player rejected by ign fallback")
 	}
-	if l.Check("Notch", "") {
+	if l.Check("Notch", "", testIP) {
 		t.Error("stale ign still accepted")
 	}
 }
@@ -100,7 +127,7 @@ func TestRenameIsNotWrittenWhenNameMatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Case differences are not renames.
-	if !l.Check("nOtCh", notchUUID) {
+	if !l.Check("nOtCh", notchUUID, testIP) {
 		t.Fatal("case-different ign rejected")
 	}
 	after, err := os.Stat(p)
@@ -116,13 +143,13 @@ func TestRenameIsNotWrittenWhenNameMatches(t *testing.T) {
 // every player mid-session.
 func TestReloadPicksUpEdits(t *testing.T) {
 	l, p := open(t, "Notch:"+notchUUID+"\n")
-	if l.Check("Alex", alexUUID) {
+	if l.Check("Alex", alexUUID, testIP) {
 		t.Fatal("Alex was not on the list yet")
 	}
 	if err := os.WriteFile(p, []byte("Notch:"+notchUUID+"\nAlex:"+alexUUID+"\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if !l.Check("Alex", alexUUID) {
+	if !l.Check("Alex", alexUUID, testIP) {
 		t.Fatal("edit not picked up")
 	}
 }
@@ -133,10 +160,10 @@ func TestBrokenReloadKeepsLastGoodList(t *testing.T) {
 	if err := os.WriteFile(p, []byte("Notch:not-a-uuid\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if !l.Check("Notch", notchUUID) {
+	if !l.Check("Notch", notchUUID, testIP) {
 		t.Fatal("a broken edit locked out a listed player")
 	}
-	if l.Check("Herobrine", "") {
+	if l.Check("Herobrine", "", testIP) {
 		t.Fatal("a broken edit let a stranger in")
 	}
 }
@@ -149,7 +176,7 @@ func TestOpenRejectsBadInput(t *testing.T) {
 		{"empty ign", ":" + notchUUID + "\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := Open(write(t, tc.body)); err == nil {
+			if _, err := Open(write(t, tc.body), nil); err == nil {
 				t.Fatal("expected an error, got nil")
 			}
 		})
@@ -158,7 +185,7 @@ func TestOpenRejectsBadInput(t *testing.T) {
 
 // An ingress told to be gated must not come up ungated.
 func TestOpenMissingFileFails(t *testing.T) {
-	if _, err := Open(filepath.Join(t.TempDir(), "absent.txt")); err == nil {
+	if _, err := Open(filepath.Join(t.TempDir(), "absent.txt"), nil); err == nil {
 		t.Fatal("missing whitelist accepted")
 	}
 }
