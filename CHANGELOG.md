@@ -20,6 +20,11 @@
   from each existing node, 0% loss, HK 44.6 ms avg and Chicago 136.1 ms avg. Node was
   provisioned and destroyed on 2026-09-01; no topology refers to it and its IP is back
   in ty-a's pool.
+- Pinned the Tailscale underlay to IPv4 on the HK↔Tokyo link, which had negotiated an
+  IPv6 path costing 2.5 ms avg and 8.3 ms mdev against 0.5 ms on IPv4. Tokyo↔Chicago
+  needed nothing: Chicago has no public IPv6. With both legs on IPv4 the chain is
+  167.5 ms p50 over Tailscale against 167.9 ms over public IPv4, so transport is now a
+  wash and the choice is about dependencies, not latency.
 - Verified HK → Tokyo → Chicago → Hypixel: status ping returns Hypixel's MOTD while
   the client claims an unrelated hostname, and all three hops appear in the socket
   table. Real client login through the chain confirmed working.

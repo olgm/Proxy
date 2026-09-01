@@ -91,8 +91,11 @@ never aim it at the backend from a node.
 - Relays enforce a source-IP allowlist in-binary. Without it a relay is an open proxy
   to Hypixel and the abuse lands on your egress IP.
 - Moving a hop onto a mesh VPN is an address change in `topology.json`, not a code
-  change. Measured on the HK→TY→CHI chain, public IPv4 and Tailscale differed by
-  1.1 ms total, so the default is public IPv4 with no VPN dependency.
+  change. Measured on the HK→TY→CHI chain, Tailscale and public IPv4 land within
+  0.5 ms of each other end to end, with Tailscale the steadier of the two. That holds
+  only once the tunnel's underlay is pinned to IPv4: left to choose, it took an IPv6
+  path on one leg that cost 2.5 ms and 16x the jitter. Default stays public IPv4, for
+  one less dependency rather than for speed.
 - Egress IP quality matters: Hypixel blocks flagged datacenter ranges. Don't probe the
   backend from an egress node either (pings, status queries, benchmark loops); test
   from your own machine, and treat the egress IP as something you can't easily
