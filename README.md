@@ -20,8 +20,9 @@ encrypts from Encryption Response onward.
 Needs Go and ssh locally; root or passwordless sudo on each node.
 
 ```sh
-cp topology.example.json topology.json   # edit
-go run ./cmd/proxyctl config             # preview, changes nothing
+cp topology.example.json topology.json     # edit
+cp whitelist.example.txt whitelist.txt     # edit, or drop `whitelist` from the route
+go run ./cmd/proxyctl config               # preview, changes nothing
 go run ./cmd/proxyctl deploy
 go run ./cmd/proxyctl status
 ```
@@ -41,8 +42,60 @@ Commands: `config`, `deploy`, `status`, `uninstall`.
 | `routes[].port` | public port on the entry node |
 | `routes[].via` | ordered relay chain after the entry |
 | `routes[].target` | final `addr`, plus `rewrite_host` / `rewrite_port` |
+| `routes[].whitelist` | optional; local `ign:uuid` file seeded onto the entry node |
 
 Hop ports are allocated automatically. `config` prints the map.
+
+## Whitelist
+
+Optional, and only on the entry node: it is the only hop that sees a Login Start.
+One player per line.
+
+```
+# friends
+Notch:069a79f4-44e9-4726-a5be-fca90e38aaf5
+```
+
+Point `routes[].whitelist` at the file and `deploy` seeds it to
+`/var/lib/proxyd/whitelist.txt`, **once**. After that the node owns it: proxyd
+rewrites the IGN column when a player renames, so later deploys leave it alone. Edit
+it there to add or remove people; the change is picked up on the next login, without
+a restart that would drop everyone mid-session. A file that fails to parse leaves the
+last good list in place.
+
+Which field is checked depends on how old the client is — the UUID only exists in
+Login Start from 1.19, and is only mandatory from 1.20.2:
+
+| Client | Matched on |
+| --- | --- |
+| 1.20.2+ | UUID; the IGN column is corrected if the player renamed |
+| 1.19–1.20.1 | UUID when sent, otherwise the IGN |
+| 1.8.9–1.18.2 | IGN — those clients send no UUID at all |
+
+Anyone not on the list gets a login Disconnect and is dropped before proxyd dials, so
+they never cost the chain a connection.
+
+### What it does not do
+
+**This is not authentication.** Both fields are the client's unverified word. proxyd
+never terminates Minecraft's encryption, so unlike a real server it can never ask
+Mojang whether a UUID belongs to the person presenting it — the session check happens
+between the client and Hypixel, out of our sight (`agents/hypixel-protocol.md` §4). A
+modified client can claim any UUID.
+
+It also does not protect the egress IP. UUIDs are public — resolvable from any IGN in
+one API call — so anyone who knows that a listed player uses this proxy can get past
+the gate. They cannot log in: Hypixel's session check fails. But they can fail it
+again and again, and every attempt reaches Hypixel from the one egress address all the
+real players share. Repeated failed session checks from a single datacenter IP is what
+gets an egress address blocked, and the whitelist answers *who*, never *how often*.
+
+The control for that is a per-source-IP connection rate limit and concurrent cap on
+the ingress — the only hop that sees a real client IP, and the one thing in the whole
+exchange a client cannot forge. Not implemented.
+
+So: the whitelist keeps uninvited players off the chain. Treat it as a door lock, not
+a security boundary.
 
 ## Firewall
 
