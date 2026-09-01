@@ -13,9 +13,10 @@
   firewall without being asked.
 - `tools/mcping`: status-ping client for checking a chain end to end. Outside the
   deploy path; build and copy it by hand.
-- Provisioned `tyo-01`, a second Tokyo node (ty-a `nrt`, `vc2-1c-1gb`, Ubuntu 26.04,
-  auto-backup off) at 198.51.100.21. Not referenced by `topology.json` yet. Node-to-node
-  ICMP baseline, 20 echoes each, 0% loss: HK 44.6 ms avg, Chicago 136.1 ms avg.
+- Measured a candidate second Tokyo node (ty-a `nrt`, `vc2-1c-1gb`): 20 ICMP echoes
+  from each existing node, 0% loss, HK 44.6 ms avg and Chicago 136.1 ms avg. Node was
+  provisioned and destroyed on 2026-09-01; no topology refers to it and its IP is back
+  in ty-a's pool.
 - Verified HK → Tokyo → Chicago → Hypixel: status ping returns Hypixel's MOTD while
   the client claims an unrelated hostname, and all three hops appear in the socket
   table. Real client login through the chain confirmed working.
