@@ -18,6 +18,19 @@
   Matches on UUID where the client sends one, on IGN for clients before 1.19 that
   send none, and rewrites the stored IGN when a player renames. The list reloads on
   change, so edits need no restart. Status pings are not gated.
+- `proxyd`: the whitelist follows renames instead of trusting a recorded name
+  forever. Names are released when a player renames and can be claimed by someone
+  else, so a stale name would otherwise admit a stranger — worst on 1.8.9, where a
+  name is all the client sends. A daily refresh re-reads every entry's current name
+  from Mojang and writes back what changed, which is well inside the ~37 day
+  (unverified) window before a released name can be re-registered; the last run is
+  stamped beside the list so a restart loop cannot burst. On top of that, a login with
+  no UUID whose name is not listed triggers one lookup of who owns that name now, and
+  is admitted only if the answer is a listed UUID — letting a just-renamed player back
+  in on an old client without letting a stranger in under their old name. Lookups are
+  the only attacker-reachable outbound requests, so they are rate limited per name,
+  per source IP (3/5min, escalating to 2/hr then 1/hr, easing back after an idle
+  window) and overall (50/5min). These calls go to Mojang, never Hypixel.
 - **The whitelist is not an authentication boundary.** Both fields are the client's
   unverified word: proxyd never terminates Minecraft's encryption, so it can never
   ask Mojang whether a UUID really belongs to that player. Anyone who knows a listed

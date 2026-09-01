@@ -75,13 +75,54 @@ Login Start from 1.19, and is only mandatory from 1.20.2:
 Anyone not on the list gets a login Disconnect and is dropped before proxyd dials, so
 they never cost the chain a connection.
 
+### Names that moved on
+
+The UUID column is the identity. The IGN column is only a cache of what that UUID is
+called today, because names are released when a player renames and can then be
+claimed by someone else. Left alone, a name written here months ago would keep
+working for whoever holds it now — which matters most for 1.8.9 clients, since a name
+is the only thing they send.
+
+Two mechanisms keep that from happening, both talking to Mojang and never to Hypixel,
+so the probe rule in `agents/operational-safety.md` does not apply to them.
+
+**A daily refresh** re-reads every entry's current name and writes back the ones that
+changed. A released name cannot be re-registered by anyone else for far longer than a
+day (~37 days, **unverified**), so the cache is never stale enough for a recycled name
+to be honoured. The last run is recorded in `whitelist.txt.refreshed` beside the list,
+so a restart loop cannot turn into a burst of Mojang traffic. Because of this, a name
+that matches the file is trusted without a lookup — logins stay local and fast.
+
+**A lookup on a miss** covers the gap. If a client sends no UUID and its name is not
+in the file, proxyd asks who owns that name right now and admits them only if the
+answer is a listed UUID — then records the new name, so it is never asked again. That
+is what lets a player who renamed and logged straight back in on 1.8.9 through, while
+a stranger who claimed their old name resolves to their own UUID and is refused. A
+login that carries a UUID never triggers a lookup: it already named an identity.
+
+Those lookups are the only attacker-reachable outbound requests here, so they are
+rate limited three ways:
+
+| Limiter | Budget | On exhaustion |
+| --- | --- | --- |
+| per name | 3 / 5 min | drops to 2/hr, then 1/hr, each rung starting spent |
+| per source IP | 3 / 5 min | same ladder; catches one address cycling names |
+| overall | 50 / 5 min | no ladder; every lookup waits for the window |
+
+A rung that passes with no attempt at all eases back up one, so someone who renamed
+and retried a few times is not pinned for the day while sustained pressure stays
+throttled. A refused lookup always denies the login — never admits it. Players who
+match the list locally are unaffected by any of this.
+
 ### What it does not do
 
 **This is not authentication.** Both fields are the client's unverified word. proxyd
 never terminates Minecraft's encryption, so unlike a real server it can never ask
 Mojang whether a UUID belongs to the person presenting it — the session check happens
 between the client and Hypixel, out of our sight (`agents/hypixel-protocol.md` §4). A
-modified client can claim any UUID.
+modified client can claim any UUID. The refresh and the miss-path lookup fix *stale*
+identity, not *forged* identity: they establish which UUID owns a name today, never
+that the client is that UUID.
 
 It also does not protect the egress IP. UUIDs are public — resolvable from any IGN in
 one API call — so anyone who knows that a listed player uses this proxy can get past

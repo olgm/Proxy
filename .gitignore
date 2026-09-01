@@ -4,6 +4,7 @@ agents/
 reference/
 topology.json
 whitelist.txt
+whitelist.txt.refreshed
 .env
 .env.*
 dirty-ips.json

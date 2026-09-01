@@ -1,8 +1,10 @@
 # One player per line, as ign:uuid. Blank lines and #-comments are kept.
 #
-# The UUID is what actually gates a modern client. The IGN is there for clients
-# before 1.19, which send no UUID at all, and is rewritten in place when a player
-# renames. Look a UUID up with:
+# The UUID is the identity. The IGN is a cache of what that UUID is called today,
+# kept current by a daily refresh against Mojang and rewritten in place when someone
+# renames — so getting it slightly wrong here is self-correcting, and a name that has
+# moved on stops working before anyone else can claim it. It matters most for clients
+# before 1.19, which send no UUID at all. Look a UUID up with:
 #
 #   curl -s https://api.mojang.com/users/profiles/minecraft/<ign>
 #
