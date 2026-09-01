@@ -12,6 +12,7 @@
       "entry": "hk",
       "port": 25565,
       "via": ["ty", "chi"],
+      "whitelist": "whitelist.txt",
       "target": {
         "addr": "mc.hypixel.net:25565",
         "rewrite_host": "mc.hypixel.net",

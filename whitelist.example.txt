@@ -1,0 +1,11 @@
+# One player per line, as ign:uuid. Blank lines and #-comments are kept.
+#
+# The UUID is what actually gates a modern client. The IGN is there for clients
+# before 1.19, which send no UUID at all, and is rewritten in place when a player
+# renames. Look a UUID up with:
+#
+#   curl -s https://api.mojang.com/users/profiles/minecraft/<ign>
+#
+# Neither field can be verified here — see the whitelist section of README.md.
+
+Notch:069a79f4-44e9-4726-a5be-fca90e38aaf5

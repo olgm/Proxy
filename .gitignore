@@ -3,6 +3,7 @@ CLAUDE.md
 agents/
 reference/
 topology.json
+whitelist.txt
 .env
 .env.*
 dirty-ips.json

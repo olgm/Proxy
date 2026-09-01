@@ -47,7 +47,19 @@ type Route struct {
 	Port   int      `json:"port"`
 	Via    []string `json:"via"`
 	Target Target   `json:"target"`
+	// Whitelist is a local ign:uuid file, seeded onto the entry node the first time
+	// it is deployed. The node owns it from then on — proxyd rewrites IGNs there
+	// when players rename — so later deploys leave it alone.
+	Whitelist string `json:"whitelist,omitempty"`
 }
+
+// The list lives outside /etc/proxyd because proxyd writes to it, and /etc stays
+// operator-owned and read-only to the service. StateDirectory= in the unit is what
+// keeps this one path writable under ProtectSystem=strict.
+const (
+	whitelistDir  = "/var/lib/proxyd"
+	whitelistPath = whitelistDir + "/whitelist.txt"
+)
 
 type Target struct {
 	Addr        string `json:"addr"`
@@ -95,7 +107,8 @@ func usage() {
   config     print the per-node configs this topology expands to, change nothing
   deploy     build, upload and start proxyd on every node
   status     report each node's service state and listening sockets
-  uninstall  stop and remove the service, binary and config (leaves the account)
+  uninstall  stop and remove the service, binary and config (leaves the account
+             and the whitelist)
 `)
 }
 
@@ -132,7 +145,32 @@ func load(path string) (*Topology, error) {
 			return nil, fmt.Errorf("node %q: ssh and addr are both required", name)
 		}
 	}
+	seeds, err := t.whitelistSeeds()
+	if err != nil {
+		return nil, err
+	}
+	// Fail on a mistyped path here, not three ssh round trips into a deploy.
+	for _, f := range seeds {
+		if _, err := os.Stat(f); err != nil {
+			return nil, fmt.Errorf("whitelist: %w", err)
+		}
+	}
 	return &t, nil
+}
+
+// whitelistSeeds maps each entry node to the local list file seeded onto it.
+func (t *Topology) whitelistSeeds() (map[string]string, error) {
+	seeds := map[string]string{}
+	for _, r := range t.Routes {
+		if r.Whitelist == "" {
+			continue
+		}
+		if old, ok := seeds[r.Entry]; ok && old != r.Whitelist {
+			return nil, fmt.Errorf("node %q is the entry for routes with different whitelists (%s, %s)", r.Entry, old, r.Whitelist)
+		}
+		seeds[r.Entry] = r.Whitelist
+	}
+	return seeds, nil
 }
 
 // expand turns the operator-facing topology into one config per node. Hop ports are
@@ -178,6 +216,9 @@ func expand(t *Topology) (map[string]*proxy.Config, []check, error) {
 				l.Minecraft = &proxy.Minecraft{
 					RewriteHost: r.Target.RewriteHost,
 					RewritePort: r.Target.RewritePort,
+				}
+				if r.Whitelist != "" {
+					l.Minecraft.Whitelist = whitelistPath
 				}
 			} else {
 				// Only the previous hop may talk to this one, otherwise the relay is
@@ -229,6 +270,9 @@ func printConfigs(t *Topology, cfgs map[string]*proxy.Config) {
 			mode := "relay"
 			if l.Minecraft != nil {
 				mode = "minecraft->" + l.Minecraft.RewriteHost
+				if l.Minecraft.Whitelist != "" {
+					mode += " +whitelist"
+				}
 			}
 			allow := "any"
 			if len(l.AllowFrom) > 0 {
@@ -248,6 +292,10 @@ func marshal(c *proxy.Config) []byte {
 func deploy(t *Topology, cfgs map[string]*proxy.Config, checks []check, repo string) error {
 	built := map[string]string{} // goarch -> local binary path
 	roots := map[string]bool{}   // node -> already root over ssh
+	seeds, err := t.whitelistSeeds()
+	if err != nil {
+		return err
+	}
 	tmp, err := os.MkdirTemp("", "proxyctl")
 	if err != nil {
 		return err
@@ -285,7 +333,13 @@ func deploy(t *Topology, cfgs map[string]*proxy.Config, checks []check, repo str
 		if err := scp(node.SSH, cfgPath, "/tmp/proxyd.config.json"); err != nil {
 			return fmt.Errorf("%s: upload config: %w", name, err)
 		}
-		out, err := ssh(node.SSH, installScript(t.User, root))
+		seed := seeds[name]
+		if seed != "" {
+			if err := scp(node.SSH, seed, "/tmp/proxyd.whitelist.txt"); err != nil {
+				return fmt.Errorf("%s: upload whitelist: %w", name, err)
+			}
+		}
+		out, err := ssh(node.SSH, installScript(t.User, root, seed != ""))
 		if err != nil {
 			return fmt.Errorf("%s: install: %w\n%s", name, err, out)
 		}
@@ -350,10 +404,19 @@ func lastLines(b []byte, n int) string {
 
 // installScript is intentionally idempotent: deploy is the only verb, and running
 // it twice must be safe.
-func installScript(user string, root bool) string {
+func installScript(user string, root, whitelist bool) string {
 	sudo := "sudo -n"
 	if root {
 		sudo = ""
+	}
+	// Seed the list only when it is absent. proxyd rewrites IGNs into this file as
+	// players rename, so the node holds the current copy; overwriting it on every
+	// deploy would silently undo those.
+	seed := ""
+	if whitelist {
+		seed = `[ -f ` + whitelistPath + ` ] || \
+  $SUDO install -m 0640 -o "$USER" -g "$USER" /tmp/proxyd.whitelist.txt ` + whitelistPath + `
+rm -f /tmp/proxyd.whitelist.txt`
 	}
 	return fmt.Sprintf(`set -eu
 SUDO="%s"
@@ -366,6 +429,8 @@ id -u "$USER" >/dev/null 2>&1 || \
 $SUDO install -m 0755 /tmp/proxyd.new /usr/local/bin/proxyd
 $SUDO install -d -m 0755 /etc/proxyd
 $SUDO install -m 0640 -o root -g "$USER" /tmp/proxyd.config.json /etc/proxyd/config.json
+$SUDO install -d -m 0750 -o "$USER" -g "$USER" %s
+%s
 rm -f /tmp/proxyd.new /tmp/proxyd.config.json
 
 $SUDO tee /etc/systemd/system/proxyd.service >/dev/null <<'UNIT'
@@ -379,6 +444,7 @@ User=%s
 ExecStart=/usr/local/bin/proxyd -c /etc/proxyd/config.json
 Restart=always
 RestartSec=2
+StateDirectory=proxyd
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
@@ -398,7 +464,7 @@ $SUDO systemctl enable proxyd >/dev/null 2>&1
 $SUDO systemctl restart proxyd
 sleep 1
 $SUDO systemctl is-active proxyd
-`, sudo, user, user)
+`, sudo, user, whitelistDir, seed, user)
 }
 
 func status(t *Topology) error {
