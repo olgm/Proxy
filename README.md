@@ -71,6 +71,21 @@ go run ./tools/mcping <entry-ip>:25565
 
 Not built or deployed by proxyctl. Copy it to a node by hand if you want it there.
 
+## Measure
+
+`tools/tcpping` times the SYN → SYN-ACK exchange. A network can rate-limit or
+deprioritise ICMP independently of TCP, so an ICMP number is not the number proxyd
+sees — on one of our legs the two differ by 3 ms, and only on one address family.
+
+```sh
+go run ./tools/tcpping -listen :19999          # target, on the far node
+go run ./tools/tcpping -c 100 <host>:19999     # probe, from the near node
+```
+
+Point it at a mesh address to time a tunnel or a public address to time the raw path;
+the destination picks the route, `-4` / `-6` pins the family. Same caveat as `mcping`:
+never aim it at the backend from a node.
+
 ## Notes
 
 - Relays enforce a source-IP allowlist in-binary. Without it a relay is an open proxy

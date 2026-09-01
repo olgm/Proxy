@@ -13,6 +13,9 @@
   firewall without being asked.
 - `tools/mcping`: status-ping client for checking a chain end to end. Outside the
   deploy path; build and copy it by hand.
+- `tools/tcpping`: TCP round-trip timing, with a `-listen` mode so any node can be a
+  target. Measures what proxyd carries instead of what ICMP reports. Outside the
+  deploy path.
 - Measured a candidate second Tokyo node (ty-a `nrt`, `vc2-1c-1gb`): 20 ICMP echoes
   from each existing node, 0% loss, HK 44.6 ms avg and Chicago 136.1 ms avg. Node was
   provisioned and destroyed on 2026-09-01; no topology refers to it and its IP is back
