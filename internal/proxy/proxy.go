@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/olgm/proxy/internal/mc"
+	"github.com/olgm/proxy/internal/mojang"
 	"github.com/olgm/proxy/internal/whitelist"
 )
 
@@ -61,6 +62,10 @@ type server struct {
 	wl    *whitelist.List
 }
 
+// newMojang builds the profile-API client backing the whitelist. A seam: tests
+// replace it so they neither reach the network nor depend on Mojang being up.
+var newMojang = func() whitelist.Mojang { return mojang.New() }
+
 // Run starts every listener and blocks.
 func Run(cfg *Config) error {
 	if len(cfg.Listeners) == 0 {
@@ -86,6 +91,9 @@ func Run(cfg *Config) error {
 		}
 		if s.wl != nil {
 			mode += fmt.Sprintf(" whitelist=%s(%d)", l.Minecraft.Whitelist, s.wl.Len())
+			// Keeps the name column fresh enough that a released name stops
+			// matching here long before anyone else can claim it.
+			s.wl.StartRefresh()
 		}
 		log.Printf("listen %s -> %s [%s] allow=%s", l.Bind, l.Upstream, mode, allow)
 		wg.Add(1)
@@ -113,7 +121,7 @@ func newServer(l Listener) (*server, error) {
 	if l.Minecraft != nil && l.Minecraft.Whitelist != "" {
 		// Refusing to start beats starting ungated: an unreadable list would
 		// otherwise silently open the chain to everyone.
-		wl, err := whitelist.Open(l.Minecraft.Whitelist)
+		wl, err := whitelist.Open(l.Minecraft.Whitelist, newMojang())
 		if err != nil {
 			return nil, fmt.Errorf("listener %s: whitelist: %w", l.Bind, err)
 		}
@@ -190,7 +198,7 @@ func (s *server) handleMinecraft(c *net.TCPConn) {
 			log.Printf("%s: login start from %s: %v", s.Bind, c.RemoteAddr(), err)
 			return
 		}
-		if !s.wl.Check(ls.Name, ls.UUIDString()) {
+		if !s.wl.Check(ls.Name, ls.UUIDString(), sourceIP(c.RemoteAddr())) {
 			log.Printf("%s: deny %s name=%q uuid=%q proto=%d",
 				s.Bind, c.RemoteAddr(), ls.Name, ls.UUIDString(), h.ProtocolVersion)
 			c.Write(mc.EncodeLoginDisconnect(denyMessage))
@@ -242,6 +250,15 @@ func (s *server) dial() (*net.TCPConn, error) {
 	t := c.(*net.TCPConn)
 	t.SetNoDelay(true)
 	return t, nil
+}
+
+// sourceIP is the rate-limiting key for Mojang lookups: the one thing a client
+// cannot forge over TCP.
+func sourceIP(a net.Addr) string {
+	if ta, ok := a.(*net.TCPAddr); ok {
+		return ta.IP.String()
+	}
+	return a.String()
 }
 
 func (s *server) allowed(a net.Addr) bool {

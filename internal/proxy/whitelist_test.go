@@ -6,13 +6,34 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/olgm/proxy/internal/mc"
+	"github.com/olgm/proxy/internal/whitelist"
 )
 
 const notchUUID = "069a79f4-44e9-4726-a5be-fca90e38aaf5"
+
+// Keep the tests off the network. Real Mojang behaviour is covered in
+// internal/mojang; here the point is only that the gate consults it and obeys it.
+type stubMojang struct{ owners map[string]string }
+
+func (s stubMojang) NameFor(uuid string) (string, bool) { return "", false }
+
+func (s stubMojang) UUIDFor(name, ip string) (string, bool) {
+	u, ok := s.owners[strings.ToLower(name)]
+	return u, ok
+}
+
+// useMojang points the listener constructor at a stub for the duration of a test.
+func useMojang(t *testing.T, owners map[string]string) {
+	t.Helper()
+	prev := newMojang
+	newMojang = func() whitelist.Mojang { return stubMojang{owners} }
+	t.Cleanup(func() { newMojang = prev })
+}
 
 var notchRaw = [16]byte{
 	0x06, 0x9a, 0x79, 0xf4, 0x44, 0xe9, 0x47, 0x26,
@@ -73,6 +94,9 @@ func fakeLoginBackend(t *testing.T) (string, <-chan sawLogin) {
 
 func whitelistIngress(t *testing.T, upstream, list string) string {
 	t.Helper()
+	if _, stubbed := newMojang().(stubMojang); !stubbed {
+		useMojang(t, nil)
+	}
 	return startNode(t, Listener{
 		Upstream:  upstream,
 		Minecraft: &Minecraft{RewriteHost: "mc.hypixel.net", RewritePort: 25565, Whitelist: list},
@@ -188,6 +212,41 @@ func TestWhitelistLetsStatusPingThrough(t *testing.T) {
 	case <-got:
 	case <-time.After(5 * time.Second):
 		t.Fatal("status ping was blocked by the whitelist")
+	}
+}
+
+// A pre-1.19 client whose name is not in the file: the ingress asks who owns that
+// name, and admits them only when the answer is a listed UUID. This is what lets a
+// renamed player back in without letting a stranger who took their old name in.
+func TestOldClientAdmittedByLookup(t *testing.T) {
+	useMojang(t, map[string]string{"notchnew": notchUUID})
+	backend, got := fakeLoginBackend(t)
+	ingress := whitelistIngress(t, backend, whitelistFile(t, "Notch:"+notchUUID+"\n"))
+
+	dialIngress(t, ingress, 47, mc.IntentLogin, loginStart("NotchNew", nil))
+
+	select {
+	case <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a renamed player on 1.8.9 was refused")
+	}
+}
+
+// The same shape, but the name resolves to someone we never listed.
+func TestOldClientRefusedWhenNameBelongsToAStranger(t *testing.T) {
+	useMojang(t, map[string]string{"notch": "11111111222233334444555555555555"})
+	backend, got := fakeLoginBackend(t)
+	ingress := whitelistIngress(t, backend, whitelistFile(t, "Steve:"+notchUUID+"\n"))
+
+	c := dialIngress(t, ingress, 47, mc.IntentLogin, loginStart("Notch", nil))
+	c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := c.Read(make([]byte, 256)); err != nil {
+		t.Fatalf("no disconnect packet: %v", err)
+	}
+	select {
+	case <-got:
+		t.Fatal("a name owned by an unlisted uuid reached the backend")
+	default:
 	}
 }
 
