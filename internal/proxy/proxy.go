@@ -17,14 +17,20 @@ import (
 	"time"
 
 	"github.com/olgm/proxy/internal/mc"
+	"github.com/olgm/proxy/internal/whitelist"
 )
 
 const (
-	// handshakeTimeout bounds how long a client may take to send its handshake.
-	// Cleared once we start relaying: the Play stream is long-lived and idles
-	// between Hypixel's ~15s keepalives.
+	// handshakeTimeout bounds how long a client may take to send its handshake,
+	// and its Login Start when there is a whitelist to check it against. Cleared
+	// once we start relaying: the Play stream is long-lived and idles between
+	// Hypixel's ~15s keepalives.
 	handshakeTimeout = 10 * time.Second
 	dialTimeout      = 10 * time.Second
+
+	// denyMessage is what a non-whitelisted player sees. Dropping the connection
+	// instead would be indistinguishable from the chain being down.
+	denyMessage = "You are not whitelisted on this proxy."
 )
 
 type Config struct {
@@ -44,11 +50,15 @@ type Listener struct {
 type Minecraft struct {
 	RewriteHost string `json:"rewrite_host"`
 	RewritePort uint16 `json:"rewrite_port"`
+	// Whitelist is the path to an ign:uuid list. Empty means anyone may log in.
+	// Only an ingress can hold one: it is the only hop that sees a Login Start.
+	Whitelist string `json:"whitelist,omitempty"`
 }
 
 type server struct {
 	Listener
 	allow []netip.Prefix
+	wl    *whitelist.List
 }
 
 // Run starts every listener and blocks.
@@ -74,6 +84,9 @@ func Run(cfg *Config) error {
 		if len(l.AllowFrom) > 0 {
 			allow = strings.Join(l.AllowFrom, ",")
 		}
+		if s.wl != nil {
+			mode += fmt.Sprintf(" whitelist=%s(%d)", l.Minecraft.Whitelist, s.wl.Len())
+		}
 		log.Printf("listen %s -> %s [%s] allow=%s", l.Bind, l.Upstream, mode, allow)
 		wg.Add(1)
 		go func() {
@@ -96,6 +109,15 @@ func newServer(l Listener) (*server, error) {
 			return nil, fmt.Errorf("listener %s: allow_from %q: %w", l.Bind, a, err)
 		}
 		s.allow = append(s.allow, p)
+	}
+	if l.Minecraft != nil && l.Minecraft.Whitelist != "" {
+		// Refusing to start beats starting ungated: an unreadable list would
+		// otherwise silently open the chain to everyone.
+		wl, err := whitelist.Open(l.Minecraft.Whitelist)
+		if err != nil {
+			return nil, fmt.Errorf("listener %s: whitelist: %w", l.Bind, err)
+		}
+		s.wl = wl
 	}
 	return s, nil
 }
@@ -156,6 +178,26 @@ func (s *server) handleMinecraft(c *net.TCPConn) {
 		log.Printf("%s: handshake from %s: %v", s.Bind, c.RemoteAddr(), err)
 		return
 	}
+
+	// The whitelist check has to happen before we dial, so a stranger costs the
+	// chain nothing and never reaches Hypixel from our egress IP. Status pings
+	// carry no identity and are left alone: gating them would hide the MOTD from
+	// whitelisted players without keeping anyone out.
+	var login []byte
+	if s.wl != nil && h.Intent != mc.IntentStatus {
+		ls, raw, err := mc.ReadLoginStart(br, h.ProtocolVersion)
+		if err != nil {
+			log.Printf("%s: login start from %s: %v", s.Bind, c.RemoteAddr(), err)
+			return
+		}
+		if !s.wl.Check(ls.Name, ls.UUIDString()) {
+			log.Printf("%s: deny %s name=%q uuid=%q proto=%d",
+				s.Bind, c.RemoteAddr(), ls.Name, ls.UUIDString(), h.ProtocolVersion)
+			c.Write(mc.EncodeLoginDisconnect(denyMessage))
+			return
+		}
+		login = raw
+	}
 	c.SetReadDeadline(time.Time{})
 
 	h.RewriteAddress(s.Minecraft.RewriteHost)
@@ -172,6 +214,13 @@ func (s *server) handleMinecraft(c *net.TCPConn) {
 
 	if _, err := u.Write(h.Encode()); err != nil {
 		return
+	}
+	// A Login Start we read to check the whitelist goes back on the wire verbatim,
+	// and ahead of anything still buffered behind it.
+	if login != nil {
+		if _, err := u.Write(login); err != nil {
+			return
+		}
 	}
 	// The client may have pipelined Login Start (or a status request) behind the
 	// handshake; bufio has already pulled those bytes off the socket, so hand them
