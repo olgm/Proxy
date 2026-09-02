@@ -114,6 +114,12 @@ and retried a few times is not pinned for the day while sustained pressure stays
 throttled. A refused lookup always denies the login — never admits it. Players who
 match the list locally are unaffected by any of this.
 
+Cost to the player when a lookup does happen: 20–35 ms measured from the operator
+machine, ~160 ms for the first one after a restart while DNS is cold, and up to the
+5 s client timeout if Mojang is unreachable. It is paid once — the resolved name is
+written to the list — and only by someone who missed it. The equivalent number from
+`hk` has not been measured.
+
 ### What it does not do
 
 **This is not authentication.** Both fields are the client's unverified word. proxyd
