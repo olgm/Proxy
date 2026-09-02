@@ -82,6 +82,18 @@ func (l *List) Len() int {
 // stranger who claimed a name we once wrote down resolves to their own UUID and is
 // refused.
 func (l *List) Check(name, uuid, ip string) bool {
+	matched, listed := l.checkLocal(name, uuid)
+	if listed {
+		return matched
+	}
+	// Not in the file, and no UUID to judge it by. Everything past here is a network
+	// call, so it happens with the lock released.
+	return l.claimedBy(name, ip)
+}
+
+// checkLocal answers from the file alone. listed reports whether it could: when it
+// is false the caller has to ask Mojang, and matched is meaningless.
+func (l *List) checkLocal(name, uuid string) (matched, listed bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.reload()
@@ -89,21 +101,21 @@ func (l *List) Check(name, uuid, ip string) bool {
 	if uuid != "" {
 		e, ok := l.byUUID[normalize(uuid)]
 		if !ok {
-			return false
+			return false, true // named an identity, and it is not one of ours
 		}
 		if !strings.EqualFold(e.name, name) {
 			l.rename(e, name)
 		}
-		return true
+		return true, true
 	}
 
 	if _, ok := l.byName[strings.ToLower(name)]; ok {
 		// Trusted without asking Mojang. Refresh keeps this column no more than a
 		// day stale, and a released name cannot be re-registered for far longer
 		// than that, so a name still in the file is still its owner's.
-		return true
+		return true, true
 	}
-	return l.claimedBy(name, ip)
+	return false, false
 }
 
 // claimedBy handles a name that is not in the file at all. Usually a stranger, but
@@ -111,6 +123,10 @@ func (l *List) Check(name, uuid, ip string) bool {
 // client too old to send a UUID. Ask Mojang who owns the name, and let them in only
 // if that UUID is listed — then record the new name, so it never has to be asked
 // again.
+//
+// The lookup runs unlocked. It can take 650 ms, and up to 5 s if Mojang is
+// unreachable; holding the list across it would stall every other login on the node
+// behind one stranger's miss.
 func (l *List) claimedBy(name, ip string) bool {
 	if l.mojang == nil {
 		return false
@@ -119,6 +135,10 @@ func (l *List) claimedBy(name, ip string) bool {
 	if !ok {
 		return false
 	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	// The file may have been edited or refreshed while we were asking.
 	e, ok := l.byUUID[normalize(uuid)]
 	if !ok {
 		return false
