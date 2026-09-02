@@ -116,10 +116,13 @@ match the list locally are unaffected by any of this.
 
 Cost to the player when a lookup does happen, measured from the HK ingress: **~650 ms
 on a cold connection, ~260 ms on a warm one**, and up to the 5 s client timeout if
-Mojang is unreachable. Mojang sits 216 ms from HK — further than Chicago — so this is
-mostly round trips, not processing. It is paid once, because the resolved name is
-written to the list, and only by someone who missed. Anyone the list already matches
-never waits at all.
+Mojang is unreachable. It is paid once, because the resolved name is written to the
+list, and only by someone who missed. Anyone the list already matches never waits.
+
+The ingress is a bad place to ask from — Chicago completes the same lookup in 68 ms —
+but relaying it through another node needs a control-plane protocol we do not have,
+to save 400 ms on something that happens a few times a year. The measurements and the
+arithmetic are in `agents/link-latency.md` if that tradeoff ever changes.
 
 ### What it does not do
 
