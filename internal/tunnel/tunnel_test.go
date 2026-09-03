@@ -20,15 +20,20 @@ type wire struct {
 	left  atomic.Pointer[net.UDPAddr]
 	n     atomic.Int64
 	drop  func(int) bool
+	delay time.Duration
 }
 
 func newWire(t *testing.T, right *net.UDPAddr, drop func(int) bool) *net.UDPAddr {
+	return newDelayedWire(t, right, drop, 0)
+}
+
+func newDelayedWire(t *testing.T, right *net.UDPAddr, drop func(int) bool, delay time.Duration) *net.UDPAddr {
 	t.Helper()
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := &wire{conn: conn, right: right, drop: drop}
+	w := &wire{conn: conn, right: right, drop: drop, delay: delay}
 	t.Cleanup(func() { conn.Close() })
 	go w.run()
 	return conn.LocalAddr().(*net.UDPAddr)
@@ -44,14 +49,23 @@ func (w *wire) run() {
 		if w.drop != nil && w.drop(int(w.n.Add(1))) {
 			continue
 		}
+		to := w.right
 		if from.String() == w.right.String() {
-			if to := w.left.Load(); to != nil {
-				w.conn.WriteToUDP(buf[:n], to)
+			if to = w.left.Load(); to == nil {
+				continue
 			}
+		} else {
+			w.left.Store(from)
+		}
+		if w.delay == 0 {
+			w.conn.WriteToUDP(buf[:n], to)
 			continue
 		}
-		w.left.Store(from)
-		w.conn.WriteToUDP(buf[:n], w.right)
+		d := bytes.Clone(buf[:n])
+		go func() {
+			time.Sleep(w.delay)
+			w.conn.WriteToUDP(d, to)
+		}()
 	}
 }
 
@@ -69,15 +83,19 @@ func local(port string) string { return "127.0.0.1:" + port }
 
 // chain builds entry -> relay -> exit with a lossy wire on each leg.
 func chain(t *testing.T, dup int, repair time.Duration, dropA, dropB func(int) bool) (entry, exit *Node) {
+	return delayedChain(t, dup, repair, 0, dropA, dropB)
+}
+
+func delayedChain(t *testing.T, dup int, repair, delay time.Duration, dropA, dropB func(int) bool) (entry, exit *Node) {
 	t.Helper()
 	k1, k2 := NewKey(), NewKey()
 	exit = mustNode(t, Options{Name: "exit", Bind: local("0"), Repair: repair,
 		Peers: []LinkConfig{{Addr: "127.0.0.1", Key: k2, Dup: dup}}})
-	w2 := newWire(t, exit.Addr(), dropB)
+	w2 := newDelayedWire(t, exit.Addr(), dropB, delay)
 	relay := mustNode(t, Options{Name: "relay", Bind: local("0"), Repair: repair,
 		Peers: []LinkConfig{{Addr: "127.0.0.1", Key: k1}},
 		Hops:  []LinkConfig{{Addr: w2.String(), Key: k2}}})
-	w1 := newWire(t, relay.Addr(), dropA)
+	w1 := newDelayedWire(t, relay.Addr(), dropA, delay)
 	entry = mustNode(t, Options{Name: "entry", Repair: repair,
 		Hops: []LinkConfig{{Addr: w1.String(), Key: k1, Dup: dup}}})
 	return entry, exit
@@ -208,6 +226,18 @@ func race(t *testing.T, dropB func(int) bool) (entry, exit *Node) {
 	entry = mustNode(t, Options{Name: "entry",
 		Hops: []LinkConfig{{Addr: wA1.String(), Key: kA}, {Addr: wB1.String(), Key: kB}}})
 	return entry, exit
+}
+
+// Enough traffic to fill the window several times, over a path with enough latency
+// for the window to be the thing that limits it. Full-size datagrams, in-order
+// delivery across many of them, and buffers freed by acknowledgement rather than
+// by age — none of which a short transfer on loopback exercises.
+func TestBulkTransferOverALatentPath(t *testing.T) {
+	entry, exit := delayedChain(t, 2, 0, 20*time.Millisecond, nil, every(16))
+	body := payload(4 << 20)
+	if got := send(t, entry, exit, body); !bytes.Equal(got, body) {
+		t.Fatalf("got %d bytes, want %d", len(got), len(body))
+	}
 }
 
 // Both directions, and a half-close that does not cut off what is still coming

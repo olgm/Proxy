@@ -2,7 +2,9 @@ package tunnel
 
 import (
 	"errors"
+	"fmt"
 	"io"
+	"log"
 	"slices"
 	"sync"
 	"time"
@@ -477,9 +479,35 @@ func (s *Stream) Close() error {
 }
 
 func (s *Stream) abort(err error) {
+	// A session that ends early otherwise leaves no trace at all: the reader above
+	// sees a closed connection and cannot tell a finished stream from a broken one.
+	if err != ErrClosed {
+		log.Printf("%s: stream %016x: %v (%s)", s.n.opt.Name, s.id, err, s.progress())
+	}
 	s.down.abort(err)
 	s.up.abort(err)
 	s.n.close(s, err != ErrReset)
+}
+
+func (s *Stream) progress() string {
+	return fmt.Sprintf("%d chunks toward the exit, %d back", s.down.progress(), s.up.progress())
+}
+
+// progress is how many chunks this direction has accounted for, which means
+// something different at each role and is the right number in all three: sent
+// where the direction originates, handed over where it terminates, seen in
+// between.
+func (d *dir) progress() uint64 {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	switch {
+	case d.originates():
+		return d.next
+	case d.terminates():
+		return d.deliver
+	default:
+		return d.top
+	}
 }
 
 func (s *Stream) touch(now time.Time) {
