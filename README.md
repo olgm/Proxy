@@ -48,7 +48,8 @@ Commands: `config`, `deploy`, `status`, `uninstall`.
 | `routes[].port` | public port on the entry node |
 | `routes[].via` | ordered relay chain after the entry, ending at the exit |
 | `routes[].transport` | `tcp` (default) or `udp` — see below |
-| `routes[].duplicate` | UDP only; copies of every packet. Default 2 |
+| `routes[].duplicate` | UDP only; copies of every packet on every leg. Default 2 |
+| `routes[].legs` | UDP only; `{from, to, duplicate}` per leg that should differ |
 | `routes[].exit` | node every path converges on. Implied by the end of `via` |
 | `routes[].paths` | UDP only; race several ways to the exit instead of one `via` |
 | `routes[].tunnel` | UDP only; `max_datagram`, `window`, `repair_ms`, `idle_ms` |
@@ -100,16 +101,32 @@ reconnects. TCP has the same failure; it only hides it for longer.
 
 ### Duplication
 
-`duplicate` applies where a chunk *enters* the tunnel — the entry going out, the
-exit coming back. A relay forwards one copy per copy it receives, so the number set
-at the entry is the number that crosses every leg: two paths at 2 put four datagrams
-into the exit, not eight. Per-leg counts would multiply along the chain and stop
-being something anyone can reason about. If one leg needs more redundancy, give it
-its own path.
+`duplicate` is a property of a leg, applied at both of its ends. Every node drops
+what it receives on a leg to one copy of each chunk, then sends it on with the count
+of the leg after, so the counts never multiply along the chain: a relay fed two
+copies from a lossy leg puts one on a clean one. Retransmissions and the tail probe
+carry the same count as everything else on that leg.
+
+The route-level number is every leg's default, a path's `duplicate` overrides it for
+that path's legs, and `legs` overrides it for one leg by name. Name a leg by the two
+nodes it joins, in the direction data travels toward the exit; the count applies
+both ways across it.
+
+```json
+"duplicate": 2,
+"legs": [
+  {"from": "ty", "to": "chi", "duplicate": 1}
+]
+```
+
+That keeps two copies on HK → Tokyo and drops to one on Tokyo → Chicago, where the
+link is clean. Two paths that share a leg share its packets, so they have to agree
+on its count; `config` refuses the topology if they don't, unless `legs` settles it.
 
 Duplication replaces a lost packet without waiting a round trip for anyone to ask
 for it. It does nothing for a leg that is dropping because it is full — there it
-makes things worse — so measure the loss before raising it.
+makes things worse — so measure the loss before raising it, one leg at a time: the
+link lines in the log say which leg is losing.
 
 ### Racing
 
@@ -129,8 +146,8 @@ copy of each chunk arrives first, so the session gets the better of the two path
 packet rather than on average, and survives either failing outright.
 
 Paths that share a leg share its packets — the shape is a graph and a node forwards
-to all of its successors — so two paths leaving the entry through the same node are
-one leg and must agree on `duplicate`. `config` refuses the topology if they don't,
+to all of its successors — so two paths through the same leg must agree on its
+`duplicate`, or name it under `legs`. `config` refuses the topology if they don't,
 and refuses a set of paths whose edges form a loop.
 
 ### Keys

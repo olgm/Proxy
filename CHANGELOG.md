@@ -62,11 +62,11 @@
   the first copy of each chunk that reaches it, drops the rest, and sends what it
   kept on with the count set for the leg after, so counts never multiply along the
   chain and a clean leg can carry one copy while a lossy one carries three. Default
-  2 everywhere. Ordering is still restored once, at the exit: putting chunks back
-  in order at a relay would stall the hops behind it on every hole, which is the
-  head-of-line blocking the tunnel exists to avoid. Duplication buys back a lost
-  packet without waiting for anyone to ask, and buys nothing against a leg that is
-  dropping because it is full.
+  2 everywhere; `routes[].legs` sets one leg by name. Ordering is still restored
+  once, at the exit: putting chunks back in order at a relay would stall the hops
+  behind it on every hole, which is the head-of-line blocking the tunnel exists to
+  avoid. Duplication buys back a lost packet without waiting for anyone to ask, and
+  buys nothing against a leg that is dropping because it is full.
 - `proxyd`: a retransmission is marked as one on the wire, so a relay that already
   holds the chunk passes it on instead of dropping it as another copy. The
   originator's probe of its highest chunk depends on this: it is the only thing that

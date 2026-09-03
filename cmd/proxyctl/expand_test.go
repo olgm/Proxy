@@ -99,9 +99,10 @@ func TestExpandUDPSinglePath(t *testing.T) {
 	if ty.Peers[0].Addr != "198.51.100.10" {
 		t.Errorf("a peer is matched on address only, got %q", ty.Peers[0].Addr)
 	}
-	// A relay never originates a chunk, so a copy count there would be a lie.
-	if ty.Peers[0].Duplicate != 0 || ty.Hops[0].Duplicate != 0 {
-		t.Errorf("relay carries duplication counts: %+v %+v", ty.Peers[0], ty.Hops[0])
+	// A relay drops what arrives to one copy and sends on with its own count,
+	// on both legs and in both directions.
+	if ty.Peers[0].Duplicate != defaultDuplicate || ty.Hops[0].Duplicate != defaultDuplicate {
+		t.Errorf("relay lacks a count for one of its legs: %+v %+v", ty.Peers[0], ty.Hops[0])
 	}
 
 	chi := only1(t, cfgs, "chi")
@@ -191,6 +192,59 @@ func TestConflictingDuplicateRejected(t *testing.T) {
 	}
 }
 
+// One leg can carry a different count from the rest of its path, and both ends
+// of it are told: the node sending into it and the node sending back across it.
+func TestLegOverridesPath(t *testing.T) {
+	top := topo(Route{Name: "r", Entry: "hk", Port: 25565, Transport: "udp",
+		Via: []string{"ty", "chi"}, Target: hypixel(),
+		Legs: []Leg{{From: "ty", To: "chi", Duplicate: 1}}})
+	cfgs, _ := expandOK(t, top)
+	hk, ty, chi := only1(t, cfgs, "hk"), only1(t, cfgs, "ty"), only1(t, cfgs, "chi")
+	if hk.Hops[0].Duplicate != 2 || ty.Peers[0].Duplicate != 2 {
+		t.Errorf("hk>ty should keep the route default: %+v %+v", hk.Hops[0], ty.Peers[0])
+	}
+	if ty.Hops[0].Duplicate != 1 || chi.Peers[0].Duplicate != 1 {
+		t.Errorf("ty>chi should carry one copy each way: %+v %+v", ty.Hops[0], chi.Peers[0])
+	}
+}
+
+// Naming a shared leg settles what its paths could not agree on, and leaves the
+// legs they do not share at each path's own count.
+func TestLegSettlesSharedLeg(t *testing.T) {
+	top := topo(Route{Name: "r", Entry: "hk", Port: 1, Transport: "udp", Exit: "chi", Target: hypixel(),
+		Paths: []Path{
+			{Via: []string{"ty"}, Duplicate: 2},
+			{Via: []string{"ty", "sg"}, Duplicate: 3},
+		},
+		Legs: []Leg{{From: "hk", To: "ty", Duplicate: 2}}})
+	cfgs, _ := expandOK(t, top)
+	ty := only1(t, cfgs, "ty")
+	dup := map[string]int{}
+	for _, h := range ty.Hops {
+		dup[h.Addr] = h.Duplicate
+	}
+	if dup["198.51.100.30:9002"] != 2 || dup["198.51.100.40:9001"] != 3 {
+		t.Errorf("ty's legs onward: %v", dup)
+	}
+}
+
+func TestLegMustBeOnAPath(t *testing.T) {
+	for _, legs := range [][]Leg{
+		{{From: "hk", To: "chi", Duplicate: 1}},
+		{{From: "chi", To: "ty", Duplicate: 1}},
+		{{From: "ty", To: "chi", Duplicate: 1}, {From: "ty", To: "chi", Duplicate: 2}},
+	} {
+		top := topo(Route{Name: "r", Entry: "hk", Port: 1, Transport: "udp",
+			Via: []string{"ty", "chi"}, Target: hypixel(), Legs: legs})
+		if err := top.Routes[0].normalize(); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := expand(top); err == nil {
+			t.Errorf("accepted legs %+v", legs)
+		}
+	}
+}
+
 func TestLoopRejected(t *testing.T) {
 	top := topo(Route{Name: "r", Entry: "hk", Port: 1, Transport: "udp", Exit: "chi", Target: hypixel(),
 		Paths: []Path{
@@ -217,6 +271,8 @@ func TestNormalizeRejectsImpossibleRoutes(t *testing.T) {
 		{"no path at all", Route{Name: "r"}},
 		{"unknown transport", Route{Name: "r", Transport: "sctp", Via: []string{"chi"}}},
 		{"duplicate below one", Route{Name: "r", Transport: "udp", Via: []string{"chi"}, Duplicate: -1}},
+		{"leg without udp", Route{Name: "r", Via: []string{"ty", "chi"}, Legs: []Leg{{From: "ty", To: "chi", Duplicate: 1}}}},
+		{"leg below one", Route{Name: "r", Transport: "udp", Via: []string{"ty", "chi"}, Legs: []Leg{{From: "ty", To: "chi"}}}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

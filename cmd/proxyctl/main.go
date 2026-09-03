@@ -58,9 +58,14 @@ type Route struct {
 	// target. Required with Paths, implied by the end of Via.
 	Exit  string `json:"exit,omitempty"`
 	Paths []Path `json:"paths,omitempty"`
-	// Duplicate is how many copies of each chunk to send, for paths that do not set
-	// their own. UDP only; defaults to 2.
+	// Duplicate is how many copies of each chunk every leg carries, for paths and
+	// legs that do not set their own. UDP only; defaults to 2.
 	Duplicate int `json:"duplicate,omitempty"`
+	// Legs sets the count on individual legs, over whatever the path they belong
+	// to says. A leg that is clean can carry one copy while the one after it
+	// carries three: every node drops the copies it receives to one and sends on
+	// with the count of the leg after.
+	Legs []Leg `json:"legs,omitempty"`
 	// Tunnel is optional per-route tuning, passed to every node on the route.
 	Tunnel *proxy.Tunnel `json:"tunnel,omitempty"`
 	Target Target        `json:"target"`
@@ -77,6 +82,16 @@ type Path struct {
 	Via       []string `json:"via"`
 	Duplicate int      `json:"duplicate,omitempty"`
 }
+
+// Leg names one node-to-node edge of a route by its ends, in the order data
+// travels toward the exit. The count applies to both directions of that leg.
+type Leg struct {
+	From      string `json:"from"`
+	To        string `json:"to"`
+	Duplicate int    `json:"duplicate"`
+}
+
+func (l Leg) edge() [2]string { return [2]string{l.From, l.To} }
 
 // defaultDuplicate is what an unqualified UDP route sends. Two copies of a
 // Minecraft session is a few tens of KB/s: cheap against one lost packet costing a
@@ -110,7 +125,7 @@ func (r *Route) normalize() error {
 		if len(r.Paths) > 1 {
 			return fmt.Errorf("route %q: racing needs transport udp; tcp carries one path", r.Name)
 		}
-		if r.Duplicate > 1 || r.Paths[0].Duplicate > 1 {
+		if r.Duplicate > 1 || r.Paths[0].Duplicate > 1 || len(r.Legs) > 0 {
 			return fmt.Errorf("route %q: duplicate needs transport udp", r.Name)
 		}
 		return nil
@@ -124,6 +139,11 @@ func (r *Route) normalize() error {
 		}
 		if r.Paths[i].Duplicate < 1 {
 			return fmt.Errorf("route %q: duplicate must be at least 1", r.Name)
+		}
+	}
+	for _, l := range r.Legs {
+		if l.Duplicate < 1 {
+			return fmt.Errorf("route %q: leg %s>%s: duplicate must be at least 1", r.Name, l.From, l.To)
 		}
 	}
 	return nil
@@ -371,12 +391,12 @@ func expandUDP(t *Topology, r Route, cfgs map[string]*proxy.Config, next int) (i
 			l.Net = "udp"
 			l.Bind = bindAddr(node.BindAddr, port[name])
 			for _, p := range g.pred[name] {
-				// Duplication is applied where a chunk enters the tunnel, so the
-				// count only means anything on the exit's side of the last leg.
+				// A peer link carries the way back, with the same count as the
+				// way out: one number per leg, set at both of its ends.
 				l.Peers = append(l.Peers, proxy.Link{
 					Addr:      t.Nodes[p].Addr,
 					Key:       t.keys.get(r.Name, p, name),
-					Duplicate: only(name == r.Exit, g.inDup[p]),
+					Duplicate: g.dup[[2]string{p, name}],
 				})
 			}
 		}
@@ -387,7 +407,7 @@ func expandUDP(t *Topology, r Route, cfgs map[string]*proxy.Config, next int) (i
 				l.Hops = append(l.Hops, proxy.Link{
 					Addr:      net.JoinHostPort(t.Nodes[to].Addr, strconv.Itoa(port[to])),
 					Key:       t.keys.get(r.Name, name, to),
-					Duplicate: only(name == r.Entry, g.outDup[to]),
+					Duplicate: g.dup[[2]string{name, to}],
 				})
 				checks = append(checks, check{from: name, to: to, why: "hop", udp: true, port: port[to],
 					addr: net.JoinHostPort(t.Nodes[to].Addr, strconv.Itoa(port[to]))})
@@ -398,25 +418,31 @@ func expandUDP(t *Topology, r Route, cfgs map[string]*proxy.Config, next int) (i
 	return next, checks, nil
 }
 
-// graph is one route's node-to-node edges, plus the duplication counts, which
-// only apply where a chunk enters the tunnel: leaving the entry, and leaving the
-// exit on the way back.
+// graph is one route's node-to-node edges, each with the number of copies it
+// carries. Every leg has its own count, and both of its ends are told it.
 type graph struct {
-	succ   map[string][]string
-	pred   map[string][]string
-	order  []string // nodes that need a bound port, in the order they first appear
-	outDup map[string]int
-	inDup  map[string]int
+	succ  map[string][]string
+	pred  map[string][]string
+	order []string // nodes that need a bound port, in the order they first appear
+	dup   map[[2]string]int
 }
 
 func buildGraph(t *Topology, r Route) (*graph, error) {
-	g := &graph{succ: map[string][]string{}, pred: map[string][]string{},
-		outDup: map[string]int{}, inDup: map[string]int{}}
+	g := &graph{succ: map[string][]string{}, pred: map[string][]string{}, dup: map[[2]string]int{}}
 	if _, ok := t.Nodes[r.Entry]; !ok {
 		return nil, fmt.Errorf("route %q: unknown node %q", r.Name, r.Entry)
 	}
 	seenNode := map[string]bool{r.Entry: true}
 	seenEdge := map[[2]string]bool{}
+	// A leg set by name wins over what its paths say, so it can also settle two
+	// paths that disagree about a leg they share.
+	named := map[[2]string]int{}
+	for _, l := range r.Legs {
+		if _, dup := named[l.edge()]; dup {
+			return nil, fmt.Errorf("route %q: leg %s>%s is listed twice", r.Name, l.From, l.To)
+		}
+		named[l.edge()] = l.Duplicate
+	}
 
 	for _, p := range r.Paths {
 		seq := append(append([]string{r.Entry}, p.Via...), r.Exit)
@@ -430,20 +456,27 @@ func buildGraph(t *Topology, r Route) (*graph, error) {
 			}
 		}
 		for i := 0; i+1 < len(seq); i++ {
-			a, b := seq[i], seq[i+1]
-			if !seenEdge[[2]string{a, b}] {
-				seenEdge[[2]string{a, b}] = true
-				g.succ[a] = append(g.succ[a], b)
-				g.pred[b] = append(g.pred[b], a)
+			e := [2]string{seq[i], seq[i+1]}
+			if !seenEdge[e] {
+				seenEdge[e] = true
+				g.succ[e[0]] = append(g.succ[e[0]], e[1])
+				g.pred[e[1]] = append(g.pred[e[1]], e[0])
+			}
+			// Two paths that share a leg share its packets, and a leg cannot
+			// carry two different numbers of copies.
+			if n, ok := named[e]; ok {
+				g.dup[e] = n
+			} else if old, ok := g.dup[e]; ok && old != p.Duplicate {
+				return nil, fmt.Errorf("route %q: paths ask for %d and %d copies of every packet on %s>%s; a leg carries one number, or set it under legs",
+					r.Name, old, p.Duplicate, e[0], e[1])
+			} else {
+				g.dup[e] = p.Duplicate
 			}
 		}
-		// Two paths that leave the entry through the same node are the same leg,
-		// and a leg cannot carry two different numbers of copies.
-		if err := agree(g.outDup, seq[1], p.Duplicate, r.Name, "leaving "+r.Entry); err != nil {
-			return nil, err
-		}
-		if err := agree(g.inDup, seq[len(seq)-2], p.Duplicate, r.Name, "leaving "+r.Exit); err != nil {
-			return nil, err
+	}
+	for e := range named {
+		if !seenEdge[e] {
+			return nil, fmt.Errorf("route %q: leg %s>%s is not on any path", r.Name, e[0], e[1])
 		}
 	}
 	// The exit binds last, so the port map reads in the order packets travel.
@@ -453,15 +486,6 @@ func buildGraph(t *Topology, r Route) (*graph, error) {
 		return nil, err
 	}
 	return g, nil
-}
-
-func agree(m map[string]int, key string, v int, route, where string) error {
-	if old, ok := m[key]; ok && old != v {
-		return fmt.Errorf("route %q: paths %s through %q ask for %d and %d copies of every packet; a leg carries one number",
-			route, where, key, old, v)
-	}
-	m[key] = v
-	return nil
 }
 
 // acyclic rejects a set of paths whose edges loop. Each path is a line, but two
@@ -527,13 +551,6 @@ func add(cfgs map[string]*proxy.Config, name string, l proxy.Listener) {
 		cfgs[name] = &proxy.Config{}
 	}
 	cfgs[name].Listeners = append(cfgs[name].Listeners, l)
-}
-
-func only(cond bool, v int) int {
-	if cond {
-		return v
-	}
-	return 0
 }
 
 func bindAddr(addr string, port int) string {
