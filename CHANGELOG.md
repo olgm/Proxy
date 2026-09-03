@@ -40,6 +40,49 @@
   whitelist does nothing to slow it. **The control for that is a per-source-IP
   connection rate limit and concurrent cap on the ingress**, which is the only hop
   that sees a real client IP; not implemented.
+- `proxyd`: `routes[].transport` chooses how the hops after the entry talk. `tcp` is
+  the original chain, unchanged byte for byte. `udp` replaces it with a tunnel that
+  numbers the byte stream at the entry, forwards each datagram on arrival at every
+  hop in between — no reordering, so a hole never stalls the hops behind it — and
+  puts it back in order once, at the exit, on its way into one TCP connection to the
+  backend. Players still arrive over TCP and the ingress is unchanged: handshake
+  rewrite, whitelist, then the bytes go into the tunnel instead of a socket.
+- `proxyd`: loss on a UDP leg is repaired by the node before it, not the far end.
+  A receiver that sees 100 and 102 asks its previous hop for 101 and asks again every
+  `RTT + 4·mdev` measured on that leg by its own ping; a node asked for something it
+  never held wants it too, so the request walks back one leg at a time. Gap detection
+  cannot see past the last number that arrived, so a sender with nothing being
+  acknowledged re-sends its highest chunk, which turns a lost tail into a hole that
+  can be asked for. A cumulative "delivered through N" runs the other way, frees the
+  retransmit buffer at every hop it passes, and is what closes the window on the
+  player's socket when the exit cannot drain into Hypixel fast enough. A chunk that
+  falls out of every buffer before it can be replaced ends the session rather than
+  hanging it.
+- `proxyd`: `duplicate` sends every packet more than once. It applies where a chunk
+  enters the tunnel — the entry going out, the exit coming back — and relays forward
+  one copy per copy received, so the count set at the entry is the count that crosses
+  every leg instead of multiplying along the chain. Default 2. It buys back a lost
+  packet without waiting for anyone to ask, and buys nothing against a leg that is
+  dropping because it is full.
+- `proxyd`: `paths` races several ways to one exit. Every path starts at the entry
+  and ends at the exit; the exit keeps the first copy of each number and drops the
+  rest, so a session gets the better path per packet rather than on average and
+  survives one path failing outright. Paths that share a leg share its packets, so
+  the shape is a graph; `proxyctl` rejects two paths that disagree about how many
+  copies a shared leg carries, and rejects a set whose edges loop.
+- **A UDP hop cannot use `allow_from`.** Over TCP an address has to complete a
+  handshake before it can be used as a source; over UDP anyone can write it on a
+  datagram, which would make a relay an open reflector and let a stranger inject
+  bytes into a live session. Every leg is therefore sealed with its own AES-256-GCM
+  key and a replay window. `proxyctl deploy` mints them into `tunnel-keys.json`
+  beside the topology — gitignored, mode 600 — and reuses them, so redeploying does
+  not cut the chain.
+- `proxyd`: one log line when a tunnel link starts or stops answering, and one per
+  link every 30 s with round-trip time, jitter, ping loss and retransmit counts. It
+  is the only view from outside a node of whether a leg carries UDP at all — a
+  filtered UDP port is indistinguishable from an open one until something replies —
+  so `proxyctl deploy` verifies UDP legs by reading it rather than by connecting, and
+  `proxyctl status` prints the latest line per link.
 - `tools/mcping`: status-ping client for checking a chain end to end. Outside the
   deploy path; build and copy it by hand.
 - `tools/tcpping`: TCP round-trip timing, with a `-listen` mode so any node can be a
@@ -57,3 +100,9 @@
 - Verified HK → Tokyo → Chicago → Hypixel: status ping returns Hypixel's MOTD while
   the client claims an unrelated hostname, and all three hops appear in the socket
   table. Real client login through the chain confirmed working.
+- Switched the live HK → Tokyo → Chicago chain to `transport: udp` with every packet
+  duplicated, single path. Racing is implemented and tested but not deployed: with
+  three nodes the only second path is HK → Chicago direct, which shares HK's uplink
+  with the relayed path. UDP on the HK leg is the risk to watch — China-route transit
+  commonly polices it — so the link lines are the thing to read after this change,
+  and `transport: tcp` is one edit and one deploy away.

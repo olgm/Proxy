@@ -1,19 +1,25 @@
 # proxy
 
-Minecraft TCP accelerator. Chains relay nodes between player and server so every hop
-runs its own congestion control — loss on one leg doesn't stall the rest.
+Minecraft TCP accelerator. Chains relay nodes between player and server so a lost
+packet is replaced by the node before it rather than by the far end.
 
-Targets Hypixel. Deployed today as HK ingress → Tokyo relay → Chicago egress.
+Legs run over plain TCP or over a UDP tunnel, per route. The tunnel can send every
+packet more than once, and down more than one path at a time.
+
+Targets Hypixel. Deployed today as HK ingress → Tokyo relay → Chicago egress, over
+UDP with every packet doubled.
 
 ## Design
 
 One binary (`proxyd`) on every node. A node has no role field: it is a list of
-listeners, each with one upstream. A listener with a `minecraft` block is an ingress;
-one without is a relay. A second ingress is one more listener, not a code change.
+listeners, each with one next leg. A listener with a `minecraft` block is an ingress;
+one that dials the target is an exit; anything else passes bytes along. A second
+ingress is one more listener, not a code change.
 
 The ingress parses exactly one packet — the handshake — rewrites the address to what
-Hypixel expects, then relays raw bytes via `splice(2)`. It cannot do more: the client
-encrypts from Encryption Response onward.
+Hypixel expects, then relays raw bytes: `splice(2)` on a TCP route, numbered chunks
+on a UDP one. It cannot do more: the client encrypts from Encryption Response
+onward.
 
 ## Deploy
 
@@ -40,11 +46,104 @@ Commands: `config`, `deploy`, `status`, `uninstall`.
 | `nodes.<n>.bind_addr` | optional; bind listeners to one local address only |
 | `routes[].entry` | node clients connect to |
 | `routes[].port` | public port on the entry node |
-| `routes[].via` | ordered relay chain after the entry |
+| `routes[].via` | ordered relay chain after the entry, ending at the exit |
+| `routes[].transport` | `tcp` (default) or `udp` — see below |
+| `routes[].duplicate` | UDP only; copies of every packet. Default 2 |
+| `routes[].exit` | node every path converges on. Implied by the end of `via` |
+| `routes[].paths` | UDP only; race several ways to the exit instead of one `via` |
+| `routes[].tunnel` | UDP only; `max_datagram`, `window`, `repair_ms`, `idle_ms` |
 | `routes[].target` | final `addr`, plus `rewrite_host` / `rewrite_port` |
 | `routes[].whitelist` | optional; local `ign:uuid` file seeded onto the entry node |
 
 Hop ports are allocated automatically. `config` prints the map.
+
+## Transport
+
+`transport` picks how the hops after the entry talk to each other. Players always
+arrive over TCP either way, and the ingress is identical in both: it parses the
+handshake, checks the whitelist, rewrites the address. Only the legs change.
+
+| | `tcp` | `udp` |
+| --- | --- | --- |
+| Loss repair | TCP's own, per leg: a round trip plus a retransmit timeout | a NACK to the previous node, one leg RTT |
+| Head-of-line blocking | at every hop | only at the exit |
+| Duplication | no | `duplicate` copies of every packet |
+| Racing | no | any number of paths into one exit |
+| Relay cost | `splice(2)`; the payload never enters userspace | bytes must be numbered, so no zero copy |
+| If a leg filters or polices UDP | not applicable | nothing gets through, and `deploy` says which leg |
+
+### How the tunnel works
+
+The entry cuts the byte stream into chunks and numbers them. Every chunk goes down
+every configured path, `duplicate` times each. Nodes in between forward each
+datagram the moment it lands and never reorder, so a hole does not stall the hops
+behind it. The exit keeps the first copy of each number, drops the rest, and writes
+them in order into one TCP connection to the target.
+
+Every leg watches its own numbers. 100 and 102 arrive and 101 does not, so the
+receiver asks the node it came from for 101, and asks again every `RTT + 4·mdev` as
+measured on that leg by its own ping. A node asked for a chunk it never held wants
+it too, so the request walks back one leg at a time until it reaches somebody
+holding it. Gap detection is blind past the last number that arrived, so the sender
+also re-sends its highest chunk when nothing is being acknowledged, which turns a
+lost tail into an ordinary hole.
+
+A cumulative "delivered through N" travels the other way a few times a second. It
+frees the retransmit buffer at every hop it passes, and it is what stops the entry
+reading from the player's socket when the exit cannot drain into Hypixel fast
+enough.
+
+A chunk that falls out of every buffer before it can be replaced ends the session:
+ordered delivery cannot continue past it, so both ends close and the player
+reconnects. TCP has the same failure; it only hides it for longer.
+
+### Duplication
+
+`duplicate` applies where a chunk *enters* the tunnel — the entry going out, the
+exit coming back. A relay forwards one copy per copy it receives, so the number set
+at the entry is the number that crosses every leg: two paths at 2 put four datagrams
+into the exit, not eight. Per-leg counts would multiply along the chain and stop
+being something anyone can reason about. If one leg needs more redundancy, give it
+its own path.
+
+Duplication replaces a lost packet without waiting a round trip for anyone to ask
+for it. It does nothing for a leg that is dropping because it is full — there it
+makes things worse — so measure the loss before raising it.
+
+### Racing
+
+`paths` sends the same chunks toward the exit several ways at once. Every path
+starts at the entry and ends at the exit; `via` lists only what lies between.
+
+```json
+"exit": "chi",
+"paths": [
+  {"via": ["ty"]},
+  {"via": [], "duplicate": 1}
+]
+```
+
+That races HK → Tokyo → Chicago against HK → Chicago direct. The exit takes whichever
+copy of each chunk arrives first, so the session gets the better of the two paths per
+packet rather than on average, and survives either failing outright.
+
+Paths that share a leg share its packets — the shape is a graph and a node forwards
+to all of its successors — so two paths leaving the entry through the same node are
+one leg and must agree on `duplicate`. `config` refuses the topology if they don't,
+and refuses a set of paths whose edges form a loop.
+
+### Keys
+
+A UDP relay cannot rely on `allow_from`. Over TCP an address has to complete a
+handshake before it can be used as a source; over UDP anyone can write it on a
+datagram, which would make a relay an open reflector and let a stranger inject bytes
+into a live session. So every leg is sealed with its own AES-256-GCM key, with a
+replay window behind it.
+
+`deploy` mints those keys into `tunnel-keys.json` beside `topology.json` — gitignored,
+mode 600 — and reuses them afterwards, so redeploying does not cut the chain. Keep
+that file. Without it the next deploy generates new keys, which only works if every
+node is redeployed together.
 
 ## Whitelist
 
@@ -161,9 +260,27 @@ previous hop only:
 ```sh
 ufw allow 25565/tcp                                       # entry node
 ufw allow from <prev-hop-ip> to any port <hop> proto tcp  # every other node
+ufw allow from <prev-hop-ip> to any port <hop> proto udp  # ... on a udp route
 ```
 
+The entry needs nothing inbound for a UDP route: it dials out and answers come back
+on the same socket. A relay or exit needs one UDP rule per path that reaches it.
+
+A blocked UDP port cannot be found by connecting to it — that always succeeds — so
+`deploy` asks the near node whether its link has been answered, and waits a few
+seconds before believing it hasn't.
+
 ## Verify
+
+`proxyd` logs one line the moment a tunnel link starts answering, and again if one
+stops, plus a line per link every 30 s with round-trip time, jitter, ping loss and
+retransmit counts. That log is the only view from outside a node of whether a leg is
+carrying UDP at all, and at what cost. `proxyctl status` prints the most recent line
+per link beside the service state.
+
+```
+:9000: link 203.0.113.30:9001 up rtt=123.1ms mdev=0.4ms loss=0.0% sent=812 recv=790 rtx=0 dropped=0
+```
 
 `tools/mcping` sends a status ping and prints the MOTD. It claims a wrong hostname by
 default, so a reply proves the ingress rewrote the address rather than the client
@@ -192,8 +309,13 @@ never aim it at the backend from a node.
 
 ## Notes
 
-- Relays enforce a source-IP allowlist in-binary. Without it a relay is an open proxy
-  to Hypixel and the abuse lands on your egress IP.
+- TCP relays enforce a source-IP allowlist in-binary. Without it a relay is an open
+  proxy to Hypixel and the abuse lands on your egress IP. UDP hops cannot use one —
+  the address is forgeable — so they authenticate every datagram instead.
+- UDP is not uniformly welcome. China-route and other cheap transit commonly polices
+  or deprioritises it, so a leg can be slower on the tunnel than on TCP even with no
+  loss at all. `transport` is per route: run both and compare the link lines before
+  committing.
 - Moving a hop onto a mesh VPN is an address change in `topology.json`, not a code
   change. Measured on the HK→TY→CHI chain, Tailscale and public IPv4 land within
   0.5 ms of each other end to end, with Tailscale the steadier of the two. That holds
