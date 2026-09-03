@@ -32,7 +32,15 @@ const (
 
 // flagFin marks the last chunk of a direction. Its payload may be empty: the
 // sequence number is what makes end-of-stream arrive in order like everything else.
-const flagFin byte = 1
+//
+// flagRtx marks a chunk sent again after its first send: an answer to a NACK, or
+// the originator's blind probe of its highest chunk. It is what lets a relay tell
+// a re-send from another copy. A copy of a number it holds is dropped; a re-send
+// of one is passed on, because the node behind it may be the one missing it.
+const (
+	flagFin byte = 1
+	flagRtx byte = 2
+)
 
 // dataHeader is type + stream + seq + flags, the plaintext a chunk carries.
 const dataHeader = 1 + 8 + 8 + 1

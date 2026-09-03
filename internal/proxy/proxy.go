@@ -75,11 +75,10 @@ type Link struct {
 	// keeps a relay from being an open reflector and a session from being injected
 	// into.
 	Key string `json:"key"`
-	// Duplicate is how many copies of each chunk this node sends when it is the one
-	// putting them on the wire: the entry going out, the exit coming back. A chunk
-	// merely passing through a relay is forwarded once per copy received, so the
-	// count set where the stream enters the tunnel is the count that crosses every
-	// leg. Default 1.
+	// Duplicate is how many copies of each chunk this node puts on this leg. It is
+	// per leg and per node: a relay drops every copy but the first of what
+	// arrives, then sends on with the count set for the leg after, so a lossy leg
+	// can carry more than a clean one without the counts compounding. Default 1.
 	Duplicate int `json:"duplicate,omitempty"`
 }
 
@@ -219,11 +218,16 @@ func (l Listener) Next() string {
 	return "udp:" + strings.Join(parts, "+")
 }
 
-// PeerAddrs are the addresses a UDP listener will answer, for the same reason.
+// PeerAddrs are the addresses a UDP listener will answer, with the copies it
+// sends back to each, for the same reason.
 func (l Listener) PeerAddrs() []string {
 	out := make([]string, 0, len(l.Peers))
 	for _, p := range l.Peers {
-		out = append(out, p.Addr)
+		a := p.Addr
+		if p.Duplicate > 1 {
+			a += fmt.Sprintf("x%d", p.Duplicate)
+		}
+		out = append(out, a)
 	}
 	return out
 }

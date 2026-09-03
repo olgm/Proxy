@@ -58,12 +58,24 @@
   player's socket when the exit cannot drain into Hypixel fast enough. A chunk that
   falls out of every buffer before it can be replaced ends the session rather than
   hanging it.
-- `proxyd`: `duplicate` sends every packet more than once. It applies where a chunk
-  enters the tunnel — the entry going out, the exit coming back — and relays forward
-  one copy per copy received, so the count set at the entry is the count that crosses
-  every leg instead of multiplying along the chain. Default 2. It buys back a lost
+- `proxyd`: `duplicate` sends every packet more than once, per leg. Every node keeps
+  the first copy of each chunk that reaches it, drops the rest, and sends what it
+  kept on with the count set for the leg after, so counts never multiply along the
+  chain and a clean leg can carry one copy while a lossy one carries three. Default
+  2 everywhere. Ordering is still restored once, at the exit: putting chunks back
+  in order at a relay would stall the hops behind it on every hole, which is the
+  head-of-line blocking the tunnel exists to avoid. Duplication buys back a lost
   packet without waiting for anyone to ask, and buys nothing against a leg that is
   dropping because it is full.
+- `proxyd`: a retransmission is marked as one on the wire, so a relay that already
+  holds the chunk passes it on instead of dropping it as another copy. The
+  originator's probe of its highest chunk depends on this: it is the only thing that
+  can reveal a tail lost on the leg *after* a relay, and a relay that swallowed it
+  would leave the exit's horizon short of the tail until the stream was given up.
+  This replaced an earlier scheme that duplicated only where a chunk entered the
+  tunnel and de-duplicated only at the exit; it was wrong for a chain, because the
+  count had to be the worst leg's count on every leg, and a relay could do nothing
+  for the leg after it.
 - `proxyd`: `paths` races several ways to one exit. Every path starts at the entry
   and ends at the exit; the exit keeps the first copy of each number and drops the
   rest, so a session gets the better path per packet rather than on average and

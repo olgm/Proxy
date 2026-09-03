@@ -67,7 +67,7 @@ handshake, checks the whitelist, rewrites the address. Only the legs change.
 | --- | --- | --- |
 | Loss repair | TCP's own, per leg: a round trip plus a retransmit timeout | a NACK to the previous node, one leg RTT |
 | Head-of-line blocking | at every hop | only at the exit |
-| Duplication | no | `duplicate` copies of every packet |
+| Duplication | no | `duplicate` copies of every packet, per leg |
 | Racing | no | any number of paths into one exit |
 | Relay cost | `splice(2)`; the payload never enters userspace | bytes must be numbered, so no zero copy |
 | If a leg filters or polices UDP | not applicable | nothing gets through, and `deploy` says which leg |
@@ -75,10 +75,11 @@ handshake, checks the whitelist, rewrites the address. Only the legs change.
 ### How the tunnel works
 
 The entry cuts the byte stream into chunks and numbers them. Every chunk goes down
-every configured path, `duplicate` times each. Nodes in between forward each
-datagram the moment it lands and never reorder, so a hole does not stall the hops
-behind it. The exit keeps the first copy of each number, drops the rest, and writes
-them in order into one TCP connection to the target.
+every configured path, `duplicate` times on each leg. Every node keeps the first
+copy of each number it sees, drops the rest, and sends what it kept on with the
+count set for the leg after. Nodes in between never reorder, so a hole does not
+stall the hops behind it; only the exit puts the chunks back in order, on their way
+into one TCP connection to the target.
 
 Every leg watches its own numbers. 100 and 102 arrive and 101 does not, so the
 receiver asks the node it came from for 101, and asks again every `RTT + 4·mdev` as

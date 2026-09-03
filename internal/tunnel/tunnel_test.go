@@ -21,6 +21,10 @@ type wire struct {
 	n     atomic.Int64
 	drop  func(int) bool
 	delay time.Duration
+	// tap sees every datagram that survived drop: which way it is going and how
+	// big it is, which is all an observer of sealed traffic can know. It may
+	// drop the datagram too.
+	tap func(toRight bool, size int) (drop bool)
 }
 
 func newWire(t *testing.T, right *net.UDPAddr, drop func(int) bool) *net.UDPAddr {
@@ -28,12 +32,20 @@ func newWire(t *testing.T, right *net.UDPAddr, drop func(int) bool) *net.UDPAddr
 }
 
 func newDelayedWire(t *testing.T, right *net.UDPAddr, drop func(int) bool, delay time.Duration) *net.UDPAddr {
+	return startWire(t, &wire{right: right, drop: drop, delay: delay})
+}
+
+func newTappedWire(t *testing.T, right *net.UDPAddr, tap func(toRight bool, size int) bool) *net.UDPAddr {
+	return startWire(t, &wire{right: right, tap: tap})
+}
+
+func startWire(t *testing.T, w *wire) *net.UDPAddr {
 	t.Helper()
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := &wire{conn: conn, right: right, drop: drop, delay: delay}
+	w.conn = conn
 	t.Cleanup(func() { conn.Close() })
 	go w.run()
 	return conn.LocalAddr().(*net.UDPAddr)
@@ -56,6 +68,9 @@ func (w *wire) run() {
 			}
 		} else {
 			w.left.Store(from)
+		}
+		if w.tap != nil && w.tap(to == w.right, n) {
+			continue
 		}
 		if w.delay == 0 {
 			w.conn.WriteToUDP(buf[:n], to)
@@ -81,7 +96,8 @@ func mustNode(t *testing.T, opt Options) *Node {
 
 func local(port string) string { return "127.0.0.1:" + port }
 
-// chain builds entry -> relay -> exit with a lossy wire on each leg.
+// chain builds entry -> relay -> exit with a lossy wire on each leg, and dup
+// copies on every leg in both directions.
 func chain(t *testing.T, dup int, repair time.Duration, dropA, dropB func(int) bool) (entry, exit *Node) {
 	return delayedChain(t, dup, repair, 0, dropA, dropB)
 }
@@ -93,8 +109,8 @@ func delayedChain(t *testing.T, dup int, repair, delay time.Duration, dropA, dro
 		Peers: []LinkConfig{{Addr: "127.0.0.1", Key: k2, Dup: dup}}})
 	w2 := newDelayedWire(t, exit.Addr(), dropB, delay)
 	relay := mustNode(t, Options{Name: "relay", Bind: local("0"), Repair: repair,
-		Peers: []LinkConfig{{Addr: "127.0.0.1", Key: k1}},
-		Hops:  []LinkConfig{{Addr: w2.String(), Key: k2}}})
+		Peers: []LinkConfig{{Addr: "127.0.0.1", Key: k1, Dup: dup}},
+		Hops:  []LinkConfig{{Addr: w2.String(), Key: k2, Dup: dup}}})
 	w1 := newDelayedWire(t, relay.Addr(), dropA, delay)
 	entry = mustNode(t, Options{Name: "entry", Repair: repair,
 		Hops: []LinkConfig{{Addr: w1.String(), Key: k1, Dup: dup}}})
@@ -183,6 +199,92 @@ func TestDuplicationSurvivesHalfLoss(t *testing.T) {
 	body := payload(200 << 10)
 	if got := send(t, entry, exit, body); !bytes.Equal(got, body) {
 		t.Fatalf("got %d bytes, want %d", len(got), len(body))
+	}
+}
+
+// A relay keeps the first copy of each number, drops the rest, and sends what it
+// kept with its own count for the next leg. Counted on the wire rather than
+// inferred: every full-size datagram leaving the relay is one copy of one
+// chunk, so their number is the chunks times that leg's setting, whatever the
+// leg before it carried.
+func TestRelayDeduplicatesThenReduplicates(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		in, out int
+	}{
+		{"two in, one out", 2, 1},
+		{"one in, three out", 1, 3},
+		{"two in, two out", 2, 2},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var full atomic.Int64
+			k1, k2 := NewKey(), NewKey()
+			exit := mustNode(t, Options{Name: "exit", Bind: local("0"),
+				Peers: []LinkConfig{{Addr: "127.0.0.1", Key: k2}}})
+			w2 := newTappedWire(t, exit.Addr(), func(toRight bool, size int) bool {
+				if toRight && size == defaultMaxDatagram {
+					full.Add(1)
+				}
+				return false
+			})
+			relay := mustNode(t, Options{Name: "relay", Bind: local("0"),
+				Peers: []LinkConfig{{Addr: "127.0.0.1", Key: k1}},
+				Hops:  []LinkConfig{{Addr: w2.String(), Key: k2, Dup: c.out}}})
+			w1 := newWire(t, relay.Addr(), nil)
+			entry := mustNode(t, Options{Name: "entry",
+				Hops: []LinkConfig{{Addr: w1.String(), Key: k1, Dup: c.in}}})
+
+			// Small enough that no socket buffer overflows on loopback: a drop
+			// there would be repaired, and the repair would be counted too.
+			body := payload(64 << 10)
+			if got := send(t, entry, exit, body); !bytes.Equal(got, body) {
+				t.Fatalf("got %d bytes, want %d", len(got), len(body))
+			}
+			chunks := int64(len(body) / entry.opt.maxChunk) // full ones; the tail is short
+			_, _, st := relay.down[0].stats()
+			if got, want := full.Load(), chunks*int64(c.out); got != want {
+				t.Fatalf("%d full datagrams left the relay, want %d chunks x %d (rtx=%d)",
+					got, chunks, c.out, st.rtx)
+			}
+		})
+	}
+}
+
+// Gap detection cannot see a lost tail, so the originator re-sends its highest
+// chunk blind. When the leg that lost it is the one after a relay, that relay
+// already holds the chunk, and the probe has to get through it anyway: dropped
+// as one more copy, the exit's horizon would never reach the tail and the stream
+// would hang until it was given up on.
+func TestTailLossBehindARelayIsRepaired(t *testing.T) {
+	// One copy per leg, so the FIN crosses the second leg exactly once; and with
+	// nothing flowing back, it is the only datagram of its size headed that way.
+	fin := nonceLen + 16 + dataHeader
+	var dropped atomic.Bool
+	k1, k2 := NewKey(), NewKey()
+	exit := mustNode(t, Options{Name: "exit", Bind: local("0"),
+		Peers: []LinkConfig{{Addr: "127.0.0.1", Key: k2}}})
+	w2 := newTappedWire(t, exit.Addr(), func(toRight bool, size int) bool {
+		return toRight && size == fin && dropped.CompareAndSwap(false, true)
+	})
+	relay := mustNode(t, Options{Name: "relay", Bind: local("0"),
+		Peers: []LinkConfig{{Addr: "127.0.0.1", Key: k1}},
+		Hops:  []LinkConfig{{Addr: w2.String(), Key: k2}}})
+	w1 := newWire(t, relay.Addr(), nil)
+	entry := mustNode(t, Options{Name: "entry",
+		Hops: []LinkConfig{{Addr: w1.String(), Key: k1}}})
+
+	body := payload(64 << 10)
+	start := time.Now()
+	if got := send(t, entry, exit, body); !bytes.Equal(got, body) {
+		t.Fatalf("got %d bytes, want %d", len(got), len(body))
+	}
+	if !dropped.Load() {
+		t.Fatal("the FIN was never seen on the second leg")
+	}
+	// The first probe fires after one probe wait; anything near the repair
+	// deadline means it was not the probe that recovered the tail.
+	if took := time.Since(start); took > 3*time.Second {
+		t.Fatalf("tail took %v to recover", took)
 	}
 }
 

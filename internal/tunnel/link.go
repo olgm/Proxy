@@ -32,8 +32,8 @@ type Link struct {
 	// peer we dial: one that dials us uses an ephemeral source port.
 	ip   netip.Addr
 	port int
-	// dup is how many copies of each chunk this node originates onto the link.
-	// A chunk merely passed through is always sent once — see Node.
+	// dup is how many copies of each chunk this node puts on the link, whether
+	// it originated the chunk, is forwarding it, or is answering a NACK for it.
 	dup int
 	// down says which side of the node this link hangs off: true toward the exit,
 	// false toward the entry. It is what tells a datagram's direction from the

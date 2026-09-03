@@ -30,10 +30,9 @@ const (
 type LinkConfig struct {
 	Addr string
 	Key  []byte
-	// Dup is how many copies of each chunk this node sends when it is the one
-	// putting them on the wire. It is ignored on a relay: a chunk merely passing
-	// through is forwarded once per copy received, so the count set where the
-	// stream enters the tunnel is the count that reaches the far end.
+	// Dup is how many copies of each chunk this node puts on this leg. It is
+	// this node's setting for this leg only: the far end drops every copy but
+	// the first, then sends on with its own count for the leg after.
 	Dup int
 }
 

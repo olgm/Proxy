@@ -58,7 +58,8 @@ type hole struct {
 //	back empty -> this node originates the direction (the entry going out, the
 //	              exit coming back), assigns sequence numbers and duplicates
 //	send empty -> the direction terminates here and must be put back in order
-//	neither    -> a relay: forward on arrival, keep a copy for the next hop to ask for
+//	neither    -> a relay: forward the first copy of each number on arrival, drop
+//	              the rest, keep it for the next hop to ask for
 type dir struct {
 	s    *Stream
 	send []*Link
@@ -129,7 +130,7 @@ func (d *dir) write(p []byte) (int, error) {
 		}
 		d.mu.Unlock()
 
-		d.transmit(c, true, false)
+		d.transmit(c, false)
 		p = p[take:]
 		total += take
 	}
@@ -152,19 +153,26 @@ func (d *dir) finish() error {
 		d.moved = c.sentAt
 	}
 	d.mu.Unlock()
-	d.transmit(c, true, false)
+	d.transmit(c, false)
 	return nil
 }
 
-func (d *dir) transmit(c *chunk, originating, rtx bool) {
-	plain := appendData(nil, d.s.id, c.seq, c.flags, c.data)
+// transmit puts a chunk on every outgoing link, as many times as that link is
+// configured to carry it. The count is the link's, not the chunk's: a chunk that
+// arrived twice from a lossy leg leaves once onto a clean one.
+func (d *dir) transmit(c *chunk, rtx bool) {
+	plain := encode(d.s.id, c, rtx)
 	for _, l := range d.send {
-		n := 1
-		if originating {
-			n = l.dup
-		}
-		l.send(plain, n, rtx)
+		l.send(plain, l.dup, rtx)
 	}
+}
+
+func encode(stream uint64, c *chunk, rtx bool) []byte {
+	flags := c.flags
+	if rtx {
+		flags |= flagRtx
+	}
+	return appendData(nil, stream, c.seq, flags, c.data)
 }
 
 func (d *dir) recv(p packet) {
@@ -204,20 +212,29 @@ func (d *dir) recv(p packet) {
 		return
 	}
 
-	// A relay. Keep one copy so the next hop can ask us for it, and pass every
-	// copy on: dropping the second would undo the duplication the entry paid for.
+	// A relay. The first copy of a number is kept, so the next hop can ask for it,
+	// and sent on with this leg's own copy count. Every later copy is dropped
+	// here: the buffer is the record of what has been seen, and anything below
+	// the watermark has already been delivered past us. A re-send is not a copy:
+	// the originator probes its highest chunk blind when nothing is being
+	// acknowledged, and if the hop after us is the one that lost it, dropping the
+	// probe here would leave the exit's horizon short of the tail for ever.
 	if p.seq < d.acked {
 		d.mu.Unlock()
 		return
 	}
-	c, held := d.buf[p.seq]
-	if !held {
-		c = &chunk{seq: p.seq, flags: p.flags, data: slices.Clone(p.payload)}
-		d.buf[p.seq] = c
-		d.bufSize += len(c.data)
+	if c, held := d.buf[p.seq]; held {
+		d.mu.Unlock()
+		if p.flags&flagRtx != 0 {
+			d.transmit(c, true)
+		}
+		return
 	}
+	c := &chunk{seq: p.seq, flags: p.flags &^ flagRtx, data: slices.Clone(p.payload)}
+	d.buf[p.seq] = c
+	d.bufSize += len(c.data)
 	d.mu.Unlock()
-	d.transmit(c, false, false)
+	d.transmit(c, false)
 }
 
 func (d *dir) read(p []byte) (int, error) {
@@ -301,7 +318,7 @@ func (d *dir) onNack(l *Link, seqs []uint64) {
 	}
 	d.mu.Unlock()
 	for _, c := range resend {
-		l.send(appendData(nil, d.s.id, c.seq, c.flags, c.data), 1, true)
+		l.send(encode(d.s.id, c, true), l.dup, true)
 	}
 }
 
@@ -380,7 +397,7 @@ func (d *dir) tick(now time.Time) {
 		}
 	}
 	if probe != nil {
-		d.transmit(probe, false, true)
+		d.transmit(probe, true)
 	}
 }
 
