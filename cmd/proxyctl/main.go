@@ -765,11 +765,15 @@ func status(t *Topology) error {
 	for _, name := range sortedNodes(t) {
 		node := t.Nodes[name]
 		// The newest line per tunnel link, keyed on the address after "link" rather
-		// than on a field number: journald's own prefix would shift those.
+		// than on a field number, because journald's own prefix would shift those.
+		// A restart clears the set: proxyd logs its listeners first, so links that
+		// only existed under an older config do not linger in the report.
 		out, _ := ssh(node.SSH, `systemctl is-active proxyd 2>&1 || true
 ss -lntup 2>/dev/null | grep proxyd || echo "  (no listening sockets)"
 journalctl -u proxyd -n 400 --no-pager -o cat 2>/dev/null |
-  awk '/ link /{for(i=1;i<=NF;i++) if($i=="link"){last[$(i+1)]=$0}} END{for(k in last) print last[k]}' |
+  awk '/ listen /{delete last}
+       / link /{for(i=1;i<=NF;i++) if($i=="link"){last[$(i+1)]=$0}}
+       END{for(k in last) print last[k]}' |
   sort || true`)
 		fmt.Printf("== %s (%s)\n%s\n", name, node.Addr, indent(string(out)))
 	}

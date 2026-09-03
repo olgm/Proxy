@@ -4,6 +4,7 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -54,9 +55,12 @@ type Link struct {
 
 type linkStats struct{ sent, recv, rtx, pings, lost, dropped uint64 }
 
+// String names the leg the way the config does, not the way the socket does: a
+// peer's ephemeral source port changes every time it restarts, and a link that
+// renames itself on every restart is one nobody can follow through a log.
 func (l *Link) String() string {
-	if r := l.remote.Load(); r != nil {
-		return r.String()
+	if l.port != 0 {
+		return net.JoinHostPort(l.ip.String(), strconv.Itoa(l.port))
 	}
 	return l.ip.String()
 }
