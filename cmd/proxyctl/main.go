@@ -28,6 +28,8 @@ type Topology struct {
 	BasePort int             `json:"base_port"`
 	Nodes    map[string]Node `json:"nodes"`
 	Routes   []Route         `json:"routes"`
+
+	keys *keyring
 }
 
 type Node struct {
@@ -42,15 +44,89 @@ type Node struct {
 }
 
 type Route struct {
-	Name   string   `json:"name"`
-	Entry  string   `json:"entry"`
-	Port   int      `json:"port"`
-	Via    []string `json:"via"`
-	Target Target   `json:"target"`
+	Name  string `json:"name"`
+	Entry string `json:"entry"`
+	Port  int    `json:"port"`
+	// Transport is how the hops after the entry talk to each other: "tcp" (default)
+	// gives every leg its own congestion control, "udp" gives up-front loss repair,
+	// duplication and racing. Players always arrive over TCP either way.
+	Transport string `json:"transport,omitempty"`
+	// Via is the ordered chain after the entry, ending at the exit. Shorthand for a
+	// single path; set Paths and Exit instead to race several.
+	Via []string `json:"via,omitempty"`
+	// Exit is the node every path converges on, and the only one that talks to the
+	// target. Required with Paths, implied by the end of Via.
+	Exit  string `json:"exit,omitempty"`
+	Paths []Path `json:"paths,omitempty"`
+	// Duplicate is how many copies of each chunk to send, for paths that do not set
+	// their own. UDP only; defaults to 2.
+	Duplicate int `json:"duplicate,omitempty"`
+	// Tunnel is optional per-route tuning, passed to every node on the route.
+	Tunnel *proxy.Tunnel `json:"tunnel,omitempty"`
+	Target Target        `json:"target"`
 	// Whitelist is a local ign:uuid file, seeded onto the entry node the first time
 	// it is deployed. The node owns it from then on — proxyd rewrites IGNs there
 	// when players rename — so later deploys leave it alone.
 	Whitelist string `json:"whitelist,omitempty"`
+}
+
+// Path is one way from the entry to the exit. Via lists only what is in between:
+// every path starts at the entry and ends at the exit, because that is what makes
+// the exit able to de-duplicate them.
+type Path struct {
+	Via       []string `json:"via"`
+	Duplicate int      `json:"duplicate,omitempty"`
+}
+
+// defaultDuplicate is what an unqualified UDP route sends. Two copies of a
+// Minecraft session is a few tens of KB/s: cheap against one lost packet costing a
+// round trip, and useless against a leg that is dropping because it is full.
+const defaultDuplicate = 2
+
+// normalize resolves the shorthand and rejects combinations that cannot work.
+func (r *Route) normalize() error {
+	switch r.Transport {
+	case "", "tcp":
+		r.Transport = "tcp"
+	case "udp":
+	default:
+		return fmt.Errorf("route %q: transport must be tcp or udp, not %q", r.Name, r.Transport)
+	}
+	if len(r.Via) > 0 && len(r.Paths) > 0 {
+		return fmt.Errorf("route %q: set via or paths, not both", r.Name)
+	}
+	if len(r.Via) > 0 {
+		r.Exit = r.Via[len(r.Via)-1]
+		r.Paths = []Path{{Via: r.Via[:len(r.Via)-1], Duplicate: r.Duplicate}}
+		r.Via = nil
+	}
+	if len(r.Paths) == 0 {
+		return fmt.Errorf("route %q: needs via or paths", r.Name)
+	}
+	if r.Exit == "" {
+		return fmt.Errorf("route %q: paths need an exit to converge on", r.Name)
+	}
+	if r.Transport == "tcp" {
+		if len(r.Paths) > 1 {
+			return fmt.Errorf("route %q: racing needs transport udp; tcp carries one path", r.Name)
+		}
+		if r.Duplicate > 1 || r.Paths[0].Duplicate > 1 {
+			return fmt.Errorf("route %q: duplicate needs transport udp", r.Name)
+		}
+		return nil
+	}
+	if r.Duplicate == 0 {
+		r.Duplicate = defaultDuplicate
+	}
+	for i := range r.Paths {
+		if r.Paths[i].Duplicate == 0 {
+			r.Paths[i].Duplicate = r.Duplicate
+		}
+		if r.Paths[i].Duplicate < 1 {
+			return fmt.Errorf("route %q: duplicate must be at least 1", r.Name)
+		}
+	}
+	return nil
 }
 
 // The list lives outside /etc/proxyd because proxyd writes to it, and /etc stays
@@ -106,9 +182,14 @@ func usage() {
 
   config     print the per-node configs this topology expands to, change nothing
   deploy     build, upload and start proxyd on every node
-  status     report each node's service state and listening sockets
+  status     report each node's service state, listening sockets and tunnel links
   uninstall  stop and remove the service, binary and config (leaves the account
              and the whitelist)
+
+A route with "transport": "udp" needs one key per leg. They are minted on the
+first deploy into tunnel-keys.json beside the topology file, and reused after
+that, so redeploying does not cut the chain. Keep that file: without it the next
+deploy mints new keys and every node has to be redeployed together.
 `)
 }
 
@@ -145,6 +226,14 @@ func load(path string) (*Topology, error) {
 			return nil, fmt.Errorf("node %q: ssh and addr are both required", name)
 		}
 	}
+	for i := range t.Routes {
+		if err := t.Routes[i].normalize(); err != nil {
+			return nil, err
+		}
+	}
+	if t.keys, err = loadKeys(path); err != nil {
+		return nil, err
+	}
 	seeds, err := t.whitelistSeeds()
 	if err != nil {
 		return nil, err
@@ -173,10 +262,10 @@ func (t *Topology) whitelistSeeds() (map[string]string, error) {
 	return seeds, nil
 }
 
-// expand turns the operator-facing topology into one config per node. Hop ports are
-// allocated here so they never have to be kept in sync by hand. It also emits the
-// reachability checks implied by the chain, so a deploy can tell the operator which
-// links are blocked instead of leaving them to discover it with a client.
+// expand turns the operator-facing topology into one config per node. Hop ports
+// are allocated here so they never have to be kept in sync by hand. It also emits
+// the reachability checks implied by the chain, so a deploy can tell the operator
+// which links are blocked instead of leaving them to discover it with a client.
 func expand(t *Topology) (map[string]*proxy.Config, []check, error) {
 	cfgs := map[string]*proxy.Config{}
 	var checks []check
@@ -189,62 +278,262 @@ func expand(t *Topology) (map[string]*proxy.Config, []check, error) {
 		if r.Port == 0 {
 			return nil, nil, fmt.Errorf("route %q: port is required", r.Name)
 		}
-		chain := append([]string{r.Entry}, r.Via...)
-		seen := map[string]bool{}
-		for _, n := range chain {
-			if _, ok := t.Nodes[n]; !ok {
-				return nil, nil, fmt.Errorf("route %q: unknown node %q", r.Name, n)
-			}
-			if seen[n] {
-				return nil, nil, fmt.Errorf("route %q: node %q appears twice in the chain", r.Name, n)
-			}
-			seen[n] = true
+		var (
+			cks []check
+			err error
+		)
+		if r.Transport == "udp" {
+			next, cks, err = expandUDP(t, r, cfgs, next)
+		} else {
+			next, cks, err = expandTCP(t, r, cfgs, next)
 		}
-
-		// Hop 0 listens on the operator-chosen public port; the rest get allocated.
-		ports := make([]int, len(chain))
-		ports[0] = r.Port
-		for i := 1; i < len(chain); i++ {
-			ports[i] = next
-			next++
+		if err != nil {
+			return nil, nil, err
 		}
-
-		for i, name := range chain {
-			node := t.Nodes[name]
-			l := proxy.Listener{Bind: bindAddr(node.BindAddr, ports[i])}
-			if i == 0 {
-				l.Minecraft = &proxy.Minecraft{
-					RewriteHost: r.Target.RewriteHost,
-					RewritePort: r.Target.RewritePort,
-				}
-				if r.Whitelist != "" {
-					l.Minecraft.Whitelist = whitelistPath
-				}
-			} else {
-				// Only the previous hop may talk to this one, otherwise the relay is
-				// an open proxy to the backend and the abuse lands on our egress IP.
-				l.AllowFrom = []string{t.Nodes[chain[i-1]].Addr}
-			}
-			if i == len(chain)-1 {
-				l.Upstream = r.Target.Addr
-			} else {
-				l.Upstream = net.JoinHostPort(t.Nodes[chain[i+1]].Addr, strconv.Itoa(ports[i+1]))
-			}
-			if cfgs[name] == nil {
-				cfgs[name] = &proxy.Config{}
-			}
-			cfgs[name].Listeners = append(cfgs[name].Listeners, l)
-
-			if i == 0 {
-				checks = append(checks, check{to: name, why: "entry", port: ports[i],
-					addr: net.JoinHostPort(node.Addr, strconv.Itoa(ports[i]))})
-			} else {
-				checks = append(checks, check{from: chain[i-1], to: name, why: "hop", port: ports[i],
-					addr: net.JoinHostPort(node.Addr, strconv.Itoa(ports[i]))})
-			}
-		}
+		checks = append(checks, cks...)
 	}
 	return cfgs, checks, nil
+}
+
+// expandTCP is the original chain: one listener per hop, each dialling the next.
+func expandTCP(t *Topology, r Route, cfgs map[string]*proxy.Config, next int) (int, []check, error) {
+	chain := append(append([]string{r.Entry}, r.Paths[0].Via...), r.Exit)
+	if err := distinct(t, r, chain); err != nil {
+		return next, nil, err
+	}
+
+	// Hop 0 listens on the operator-chosen public port; the rest get allocated.
+	ports := make([]int, len(chain))
+	ports[0] = r.Port
+	for i := 1; i < len(chain); i++ {
+		ports[i] = next
+		next++
+	}
+
+	var checks []check
+	for i, name := range chain {
+		node := t.Nodes[name]
+		l := proxy.Listener{Bind: bindAddr(node.BindAddr, ports[i])}
+		if i == 0 {
+			l.Minecraft = minecraft(r)
+		} else {
+			// Only the previous hop may talk to this one, otherwise the relay is
+			// an open proxy to the backend and the abuse lands on our egress IP.
+			l.AllowFrom = []string{t.Nodes[chain[i-1]].Addr}
+		}
+		if i == len(chain)-1 {
+			l.Upstream = r.Target.Addr
+		} else {
+			l.Upstream = net.JoinHostPort(t.Nodes[chain[i+1]].Addr, strconv.Itoa(ports[i+1]))
+		}
+		add(cfgs, name, l)
+
+		if i == 0 {
+			checks = append(checks, entryCheck(node, name, ports[i]))
+		} else {
+			checks = append(checks, check{from: chain[i-1], to: name, why: "hop", port: ports[i],
+				addr: net.JoinHostPort(node.Addr, strconv.Itoa(ports[i]))})
+		}
+	}
+	return next, checks, nil
+}
+
+// expandUDP lays out a tunnel. Every path starts at the entry and ends at the
+// exit, so the shape is a graph rather than a line: a node forwards to all of its
+// successors and answers all of its predecessors, and the exit is the one place
+// the copies are merged back into a stream.
+func expandUDP(t *Topology, r Route, cfgs map[string]*proxy.Config, next int) (int, []check, error) {
+	g, err := buildGraph(t, r)
+	if err != nil {
+		return next, nil, err
+	}
+
+	// One UDP port per node that gets dialled. The entry is not one of them: it
+	// dials out and replies come back to the same socket, so it needs no inbound
+	// rule of its own.
+	port := map[string]int{}
+	for _, n := range g.order {
+		port[n] = next
+		next++
+	}
+
+	var checks []check
+	for _, name := range append([]string{r.Entry}, g.order...) {
+		node := t.Nodes[name]
+		var l proxy.Listener
+		l.Tunnel = r.Tunnel
+
+		if name == r.Entry {
+			l.Bind = bindAddr(node.BindAddr, r.Port)
+			l.Minecraft = minecraft(r)
+			checks = append(checks, entryCheck(node, name, r.Port))
+		} else {
+			l.Net = "udp"
+			l.Bind = bindAddr(node.BindAddr, port[name])
+			for _, p := range g.pred[name] {
+				// Duplication is applied where a chunk enters the tunnel, so the
+				// count only means anything on the exit's side of the last leg.
+				l.Peers = append(l.Peers, proxy.Link{
+					Addr:      t.Nodes[p].Addr,
+					Key:       t.keys.get(r.Name, p, name),
+					Duplicate: only(name == r.Exit, g.inDup[p]),
+				})
+			}
+		}
+		if name == r.Exit {
+			l.Upstream = r.Target.Addr
+		} else {
+			for _, to := range g.succ[name] {
+				l.Hops = append(l.Hops, proxy.Link{
+					Addr:      net.JoinHostPort(t.Nodes[to].Addr, strconv.Itoa(port[to])),
+					Key:       t.keys.get(r.Name, name, to),
+					Duplicate: only(name == r.Entry, g.outDup[to]),
+				})
+				checks = append(checks, check{from: name, to: to, why: "hop", udp: true, port: port[to],
+					addr: net.JoinHostPort(t.Nodes[to].Addr, strconv.Itoa(port[to]))})
+			}
+		}
+		add(cfgs, name, l)
+	}
+	return next, checks, nil
+}
+
+// graph is one route's node-to-node edges, plus the duplication counts, which
+// only apply where a chunk enters the tunnel: leaving the entry, and leaving the
+// exit on the way back.
+type graph struct {
+	succ   map[string][]string
+	pred   map[string][]string
+	order  []string // nodes that need a bound port, in the order they first appear
+	outDup map[string]int
+	inDup  map[string]int
+}
+
+func buildGraph(t *Topology, r Route) (*graph, error) {
+	g := &graph{succ: map[string][]string{}, pred: map[string][]string{},
+		outDup: map[string]int{}, inDup: map[string]int{}}
+	if _, ok := t.Nodes[r.Entry]; !ok {
+		return nil, fmt.Errorf("route %q: unknown node %q", r.Name, r.Entry)
+	}
+	seenNode := map[string]bool{r.Entry: true}
+	seenEdge := map[[2]string]bool{}
+
+	for _, p := range r.Paths {
+		seq := append(append([]string{r.Entry}, p.Via...), r.Exit)
+		if err := distinct(t, r, seq); err != nil {
+			return nil, err
+		}
+		for _, n := range seq {
+			if !seenNode[n] && n != r.Exit {
+				seenNode[n] = true
+				g.order = append(g.order, n)
+			}
+		}
+		for i := 0; i+1 < len(seq); i++ {
+			a, b := seq[i], seq[i+1]
+			if !seenEdge[[2]string{a, b}] {
+				seenEdge[[2]string{a, b}] = true
+				g.succ[a] = append(g.succ[a], b)
+				g.pred[b] = append(g.pred[b], a)
+			}
+		}
+		// Two paths that leave the entry through the same node are the same leg,
+		// and a leg cannot carry two different numbers of copies.
+		if err := agree(g.outDup, seq[1], p.Duplicate, r.Name, "leaving "+r.Entry); err != nil {
+			return nil, err
+		}
+		if err := agree(g.inDup, seq[len(seq)-2], p.Duplicate, r.Name, "leaving "+r.Exit); err != nil {
+			return nil, err
+		}
+	}
+	// The exit binds last, so the port map reads in the order packets travel.
+	g.order = append(g.order, r.Exit)
+
+	if err := g.acyclic(r); err != nil {
+		return nil, err
+	}
+	return g, nil
+}
+
+func agree(m map[string]int, key string, v int, route, where string) error {
+	if old, ok := m[key]; ok && old != v {
+		return fmt.Errorf("route %q: paths %s through %q ask for %d and %d copies of every packet; a leg carries one number",
+			route, where, key, old, v)
+	}
+	m[key] = v
+	return nil
+}
+
+// acyclic rejects a set of paths whose edges loop. Each path is a line, but two
+// of them can still disagree about which way a leg runs, and a loop in a tunnel
+// that floods every successor is a packet storm.
+func (g *graph) acyclic(r Route) error {
+	const (
+		open = 1
+		done = 2
+	)
+	state := map[string]int{}
+	var walk func(string) error
+	walk = func(n string) error {
+		switch state[n] {
+		case done:
+			return nil
+		case open:
+			return fmt.Errorf("route %q: paths form a loop through %q", r.Name, n)
+		}
+		state[n] = open
+		for _, to := range g.succ[n] {
+			if err := walk(to); err != nil {
+				return err
+			}
+		}
+		state[n] = done
+		return nil
+	}
+	return walk(r.Entry)
+}
+
+// distinct rejects a path that visits a node twice, or names one that does not
+// exist. A repeat would make a node its own next hop.
+func distinct(t *Topology, r Route, seq []string) error {
+	seen := map[string]bool{}
+	for _, n := range seq {
+		if _, ok := t.Nodes[n]; !ok {
+			return fmt.Errorf("route %q: unknown node %q", r.Name, n)
+		}
+		if seen[n] {
+			return fmt.Errorf("route %q: node %q appears twice in one path", r.Name, n)
+		}
+		seen[n] = true
+	}
+	return nil
+}
+
+func minecraft(r Route) *proxy.Minecraft {
+	m := &proxy.Minecraft{RewriteHost: r.Target.RewriteHost, RewritePort: r.Target.RewritePort}
+	if r.Whitelist != "" {
+		m.Whitelist = whitelistPath
+	}
+	return m
+}
+
+func entryCheck(node Node, name string, port int) check {
+	return check{to: name, why: "entry", port: port,
+		addr: net.JoinHostPort(node.Addr, strconv.Itoa(port))}
+}
+
+func add(cfgs map[string]*proxy.Config, name string, l proxy.Listener) {
+	if cfgs[name] == nil {
+		cfgs[name] = &proxy.Config{}
+	}
+	cfgs[name].Listeners = append(cfgs[name].Listeners, l)
+}
+
+func only(cond bool, v int) int {
+	if cond {
+		return v
+	}
+	return 0
 }
 
 func bindAddr(addr string, port int) string {
@@ -267,18 +556,18 @@ func printConfigs(t *Topology, cfgs map[string]*proxy.Config) {
 	for _, n := range names(cfgs) {
 		fmt.Printf("%s (%s)\n", n, t.Nodes[n].Addr)
 		for _, l := range cfgs[n].Listeners {
-			mode := "relay"
-			if l.Minecraft != nil {
-				mode = "minecraft->" + l.Minecraft.RewriteHost
-				if l.Minecraft.Whitelist != "" {
-					mode += " +whitelist"
-				}
+			mode := l.Role()
+			if l.Minecraft != nil && l.Minecraft.Whitelist != "" {
+				mode += " +whitelist"
 			}
-			allow := "any"
+			guard := "allow=any"
 			if len(l.AllowFrom) > 0 {
-				allow = strings.Join(l.AllowFrom, ",")
+				guard = "allow=" + strings.Join(l.AllowFrom, ",")
 			}
-			fmt.Printf("    %-22s -> %-28s %-28s allow=%s\n", l.Bind, l.Upstream, mode, allow)
+			if l.Net == "udp" {
+				guard = "peers=" + strings.Join(l.PeerAddrs(), ",")
+			}
+			fmt.Printf("    %-3s %-22s -> %-32s %-28s %s\n", l.Network(), l.Bind, l.Next(), mode, guard)
 		}
 	}
 	fmt.Println()
@@ -294,6 +583,11 @@ func deploy(t *Topology, cfgs map[string]*proxy.Config, checks []check, repo str
 	roots := map[string]bool{}   // node -> already root over ssh
 	seeds, err := t.whitelistSeeds()
 	if err != nil {
+		return err
+	}
+	// Before anything is uploaded: a config carrying a key we then failed to
+	// record would leave that node unable to talk to the next deploy.
+	if err := t.keys.save(); err != nil {
 		return err
 	}
 	tmp, err := os.MkdirTemp("", "proxyctl")
@@ -470,8 +764,13 @@ $SUDO systemctl is-active proxyd
 func status(t *Topology) error {
 	for _, name := range sortedNodes(t) {
 		node := t.Nodes[name]
+		// The newest line per tunnel link, keyed on the address after "link" rather
+		// than on a field number: journald's own prefix would shift those.
 		out, _ := ssh(node.SSH, `systemctl is-active proxyd 2>&1 || true
-ss -lntp 2>/dev/null | grep proxyd || echo "  (no listening sockets)"`)
+ss -lntup 2>/dev/null | grep proxyd || echo "  (no listening sockets)"
+journalctl -u proxyd -n 400 --no-pager -o cat 2>/dev/null |
+  awk '/ link /{for(i=1;i<=NF;i++) if($i=="link"){last[$(i+1)]=$0}} END{for(k in last) print last[k]}' |
+  sort || true`)
 		fmt.Printf("== %s (%s)\n%s\n", name, node.Addr, indent(string(out)))
 	}
 	return nil

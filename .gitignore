@@ -3,6 +3,7 @@ CLAUDE.md
 agents/
 reference/
 topology.json
+tunnel-keys.json
 whitelist.txt
 whitelist.txt.refreshed
 .env

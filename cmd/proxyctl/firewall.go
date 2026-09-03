@@ -19,6 +19,17 @@ type check struct {
 	addr string
 	port int
 	why  string
+	// udp changes both how the link is tested and which rule opens it. A UDP port
+	// cannot be probed by connecting to it — that always succeeds — so the test is
+	// whether proxyd on the near side has had an answer from the far side.
+	udp bool
+}
+
+func (c check) proto() string {
+	if c.udp {
+		return "udp"
+	}
+	return "tcp"
 }
 
 func (c check) String() string {
@@ -26,7 +37,7 @@ func (c check) String() string {
 	if c.from != "" {
 		src = c.from
 	}
-	return fmt.Sprintf("%s -> %s:%d (%s)", src, c.to, c.port, c.why)
+	return fmt.Sprintf("%s -> %s:%d/%s (%s)", src, c.to, c.port, c.proto(), c.why)
 }
 
 // verify reports which links are blocked and, when a firewall is the likely cause,
@@ -84,7 +95,29 @@ func verify(t *Topology, checks []check, roots map[string]bool) error {
 	return nil
 }
 
+// linkUp asks the near node whether its tunnel to the far node has been answered.
+// proxyd logs one line per link the moment a pong comes back, and again if one
+// stops coming; that log is the only honest signal, since nothing about a UDP
+// socket distinguishes a filtered port from an open one.
+func linkUp(t *Topology, c check) bool {
+	cmd := fmt.Sprintf(
+		`journalctl -u proxyd -n 400 --no-pager -o cat 2>/dev/null | grep -F "link %s " | tail -1`, c.addr)
+	// The far node has to be running and the two have to have exchanged a ping,
+	// which takes a second; give a blocked link long enough to prove it is blocked.
+	for i := 0; i < 6; i++ {
+		out, _ := ssh(t.Nodes[c.from].SSH, cmd)
+		if strings.Contains(string(out), " up") {
+			return true
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return false
+}
+
 func reachable(t *Topology, c check) bool {
+	if c.udp {
+		return linkUp(t, c)
+	}
 	if c.from == "" {
 		conn, err := net.DialTimeout("tcp", c.addr, 8*time.Second)
 		if err != nil {
@@ -124,10 +157,10 @@ iptables -S 2>/dev/null | grep -E '^-P INPUT' || true`)
 func ufwRule(t *Topology, c check) string {
 	port := strconv.Itoa(c.port)
 	if c.from == "" {
-		return fmt.Sprintf("ufw allow %s/tcp comment 'proxyd entry'", port)
+		return fmt.Sprintf("ufw allow %s/%s comment 'proxyd entry'", port, c.proto())
 	}
-	return fmt.Sprintf("ufw allow from %s to any port %s proto tcp comment 'proxyd hop from %s'",
-		t.Nodes[c.from].Addr, port, c.from)
+	return fmt.Sprintf("ufw allow from %s to any port %s proto %s comment 'proxyd hop from %s'",
+		t.Nodes[c.from].Addr, port, c.proto(), c.from)
 }
 
 // confirm returns false without asking when there is no terminal, so a scripted
