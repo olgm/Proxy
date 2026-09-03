@@ -96,6 +96,29 @@ type Tunnel struct {
 	RepairMS int `json:"repair_ms,omitempty"`
 	// IdleMS reaps a relay's stream state after this long without a datagram.
 	IdleMS int `json:"idle_ms,omitempty"`
+
+	// Timers, all in milliseconds, zero for the default. Minecraft traffic is
+	// light, so these can be far more aggressive than the defaults without the
+	// extra packets mattering; the defaults lean toward not wasting a leg.
+	TickMS int `json:"tick_ms,omitempty"` // granularity of every timer below; 5
+	PingMS int `json:"ping_ms,omitempty"` // per link; down after five unanswered; 1000
+	// NackMinMS and NackMaxMS clamp the re-ask interval for a hole, and the
+	// repeat of a quiet sender's horizon: srtt + 4·mdev on that leg, held
+	// between these. Equal values fix it. 10 and 1000.
+	NackMinMS int `json:"nack_min_ms,omitempty"`
+	NackMaxMS int `json:"nack_max_ms,omitempty"`
+	// HeadQuietMS is how long a sender with chunks unacknowledged stays silent
+	// before telling the next hop how far it got. 10.
+	HeadQuietMS int `json:"head_quiet_ms,omitempty"`
+	// AckMS bounds how often the exit reports what it has read when that has
+	// moved; AckRepeatMS re-announces it when it has not. 20 and 250.
+	AckMS       int `json:"ack_ms,omitempty"`
+	AckRepeatMS int `json:"ack_repeat_ms,omitempty"`
+	// ProbeMinMS and ProbeMaxMS clamp the entry's blind re-send of its highest
+	// chunk, the backstop behind the horizon: end-to-end srtt + 4·mdev, doubling
+	// on each try. 100 and 1000.
+	ProbeMinMS int `json:"probe_min_ms,omitempty"`
+	ProbeMaxMS int `json:"probe_max_ms,omitempty"`
 }
 
 type Minecraft struct {
@@ -293,10 +316,18 @@ func newTunnel(l Listener) (*tunnel.Node, error) {
 		return nil, fmt.Errorf("listener %s: hops: %w", l.Bind, err)
 	}
 	if t := l.Tunnel; t != nil {
+		ms := func(n int) time.Duration { return time.Duration(n) * time.Millisecond }
 		opt.MaxDatagram = t.MaxDatagram
 		opt.Window = t.Window
-		opt.Repair = time.Duration(t.RepairMS) * time.Millisecond
-		opt.Idle = time.Duration(t.IdleMS) * time.Millisecond
+		opt.Repair = ms(t.RepairMS)
+		opt.Idle = ms(t.IdleMS)
+		opt.Timers = tunnel.Timers{
+			Tick: ms(t.TickMS), Ping: ms(t.PingMS),
+			NackMin: ms(t.NackMinMS), NackMax: ms(t.NackMaxMS),
+			HeadQuiet: ms(t.HeadQuietMS),
+			AckEvery:  ms(t.AckMS), AckRepeat: ms(t.AckRepeatMS),
+			ProbeMin: ms(t.ProbeMinMS), ProbeMax: ms(t.ProbeMaxMS),
+		}
 	}
 	n, err := tunnel.New(opt)
 	if err != nil {

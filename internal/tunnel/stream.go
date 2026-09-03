@@ -21,10 +21,6 @@ var (
 )
 
 const (
-	// ackEvery bounds how often a terminator reports its watermark; ackRepeat
-	// re-announces it so a lost ACK cannot wedge the buffers behind it.
-	ackEvery  = 20 * time.Millisecond
-	ackRepeat = 250 * time.Millisecond
 	// maxProbes bounds the originator's blind retransmits before it gives up on
 	// the path entirely. Backed off, it works out near the repair deadline.
 	maxProbes = 8
@@ -33,10 +29,6 @@ const (
 	linger = 60 * time.Second
 	// maxHoles bounds how far ahead of itself a peer may claim to be.
 	maxHoles = 1 << 16
-	// headQuiet is how long a sender with chunks outstanding stays silent before
-	// telling the next hop how far it got. Minecraft is bursty, and a lost tail
-	// of a burst is otherwise invisible until the next burst reveals it.
-	headQuiet = 10 * time.Millisecond
 )
 
 type chunk struct {
@@ -82,7 +74,7 @@ type dir struct {
 	srtt    time.Duration
 	mdev    time.Duration
 	// lastSent and lastHead drive the horizon advert: it goes out once the
-	// direction has been quiet for headQuiet, then again every leg RTO.
+	// direction has been quiet for HeadQuiet, then again every leg RTO.
 	lastSent time.Time
 	lastHead time.Time
 
@@ -375,6 +367,7 @@ func (d *dir) tick(now time.Time) {
 		probe *chunk
 		dead  bool
 	)
+	t := &d.s.n.opt.Timers
 	d.mu.Lock()
 	if d.err != nil {
 		d.mu.Unlock()
@@ -398,15 +391,15 @@ func (d *dir) tick(now time.Time) {
 			ask = append(ask, s)
 		}
 	}
-	if d.terminates() && d.deliver > 0 && now.Sub(d.lastAck) >= ackEvery &&
-		(d.deliver > d.sentAck || now.Sub(d.lastAck) >= ackRepeat) {
+	if d.terminates() && d.deliver > 0 && now.Sub(d.lastAck) >= t.AckEvery &&
+		(d.deliver > d.sentAck || now.Sub(d.lastAck) >= t.AckRepeat) {
 		ack, d.sentAck, d.lastAck = d.deliver, d.deliver, now
 	}
 	// Quiet with chunks the far end has not acknowledged: say how far we got, so
 	// a tail lost on this leg is asked for on this leg, and again every leg RTO
 	// while it stays unacknowledged, in case the advert itself was lost.
-	if !d.terminates() && d.acked < d.horizon() && now.Sub(d.lastSent) >= headQuiet {
-		wait := headQuiet
+	if !d.terminates() && d.acked < d.horizon() && now.Sub(d.lastSent) >= t.HeadQuiet {
+		wait := t.HeadQuiet
 		if d.lastHead.After(d.lastSent) {
 			wait = rtoOf(d.send)
 		}
@@ -488,15 +481,16 @@ func (d *dir) sampleRTT(r time.Duration) {
 }
 
 func (d *dir) probeWait() time.Duration {
+	t := &d.s.n.opt.Timers
 	base := 500 * time.Millisecond
 	if d.srtt > 0 {
 		base = d.srtt + 4*d.mdev
 	}
-	return clamp(base<<min(d.probes, 3), 100*time.Millisecond, time.Second)
+	return clamp(base<<min(d.probes, 3), t.ProbeMin, t.ProbeMax)
 }
 
 func rtoOf(links []*Link) time.Duration {
-	out := maxRTO
+	out := time.Duration(1<<63 - 1)
 	for _, l := range links {
 		out = min(out, l.rto())
 	}

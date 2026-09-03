@@ -382,6 +382,47 @@ func race(t *testing.T, dropB func(int) bool) (entry, exit *Node) {
 	return entry, exit
 }
 
+// Every timer turned down as far as anyone would: the chain still carries a
+// stream through loss on both legs, and a lost tail is still found. This is
+// what an operator tuning for latency over a light Minecraft stream will run.
+func TestAggressiveTimers(t *testing.T) {
+	fast := Timers{Tick: time.Millisecond, Ping: 50 * time.Millisecond,
+		NackMin: 2 * time.Millisecond, NackMax: 5 * time.Millisecond,
+		HeadQuiet: 2 * time.Millisecond,
+		AckEvery:  2 * time.Millisecond, AckRepeat: 10 * time.Millisecond,
+		ProbeMin: 20 * time.Millisecond, ProbeMax: 50 * time.Millisecond}
+	k1, k2 := NewKey(), NewKey()
+	dropFin := once(finSize)
+	exit := mustNode(t, Options{Name: "exit", Bind: local("0"), Timers: fast,
+		Peers: []LinkConfig{{Addr: "127.0.0.1", Key: k2}}})
+	w2 := newTappedWire(t, exit.Addr(), func(toRight bool, size int) bool {
+		return toRight && dropFin(size)
+	})
+	relay := mustNode(t, Options{Name: "relay", Bind: local("0"), Timers: fast,
+		Peers: []LinkConfig{{Addr: "127.0.0.1", Key: k1}},
+		Hops:  []LinkConfig{{Addr: w2.String(), Key: k2}}})
+	w1 := newWire(t, relay.Addr(), every(5))
+	entry := mustNode(t, Options{Name: "entry", Timers: fast,
+		Hops: []LinkConfig{{Addr: w1.String(), Key: k1}}})
+	body := payload(200 << 10)
+	if got := send(t, entry, exit, body); !bytes.Equal(got, body) {
+		t.Fatalf("got %d bytes, want %d", len(got), len(body))
+	}
+}
+
+func TestTimersThatCannotWork(t *testing.T) {
+	for _, tm := range []Timers{
+		{NackMin: 50 * time.Millisecond, NackMax: 10 * time.Millisecond},
+		{ProbeMin: 2 * time.Second, ProbeMax: time.Second},
+		{Tick: -time.Millisecond},
+	} {
+		_, err := New(Options{Name: "x", Timers: tm, Hops: []LinkConfig{{Addr: "127.0.0.1:1", Key: NewKey()}}})
+		if err == nil {
+			t.Errorf("accepted %+v", tm)
+		}
+	}
+}
+
 // Enough traffic to fill the window several times, over a path with enough latency
 // for the window to be the thing that limits it. Full-size datagrams, in-order
 // delivery across many of them, and buffers freed by acknowledgement rather than

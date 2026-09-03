@@ -86,6 +86,13 @@
   end-to-end probe stays as the backstop, and now fires only when the adverts are
   lost too. An end-of-burst flag would have been the wrong tool: it rides on the
   chunk that was lost.
+- `proxyd`: every timer in the tunnel is configurable from `routes[].tunnel`, per
+  route and therefore on every node of it: the tick, the ping, the clamp on how
+  often a hole is asked for again, how long a sender stays quiet before announcing
+  its horizon, how often the exit reports what it read, and the clamp on the
+  end-to-end probe. The defaults are unchanged and lean toward thrift; Minecraft
+  traffic is light enough that all of them can be made far more aggressive without
+  a leg noticing, and the README gives a setting to start from.
 - `proxyd`: `paths` races several ways to one exit. Every path starts at the entry
   and ends at the exit; the exit keeps the first copy of each number and drops the
   rest, so a session gets the better path per packet rather than on average and

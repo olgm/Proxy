@@ -132,6 +132,8 @@ func TestRejectsBadTunnelConfig(t *testing.T) {
 		{"key that is not a key", Listener{Bind: ":1", Hops: []Link{{Addr: "127.0.0.1:1", Key: "nope"}}}},
 		{"peer addressed with a port", Listener{Net: "udp", Bind: "127.0.0.1:0", Upstream: "x:1",
 			Peers: []Link{{Addr: "127.0.0.1:9000", Key: k}}}},
+		{"nack clamp upside down", Listener{Bind: ":1", Hops: []Link{{Addr: "127.0.0.1:1", Key: k}},
+			Tunnel: &Tunnel{NackMinMS: 100, NackMaxMS: 10}}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

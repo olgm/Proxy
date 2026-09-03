@@ -20,10 +20,74 @@ const (
 	defaultWindow      = 1 << 20
 	defaultRepair      = 5 * time.Second
 	defaultIdle        = 120 * time.Second
-	tickEvery          = 5 * time.Millisecond
 	sweepEvery         = 5 * time.Second
 	acceptBacklog      = 64
 )
+
+// Timers are every interval the tunnel runs on. Zero means the default. They
+// are per node, so proxyctl sets the same ones on every node of a route; a
+// receiver that re-asks faster than its sender expects is not wrong, only
+// noisier. Minecraft traffic is light enough that all of these can be made a
+// good deal more aggressive than the defaults without the extra packets
+// mattering, and the defaults lean toward not wasting a leg's capacity.
+type Timers struct {
+	// Tick is the granularity of everything below. 5 ms.
+	Tick time.Duration
+	// Ping is sent per link; a link is called down after five unanswered. 1 s.
+	Ping time.Duration
+	// NackMin and NackMax clamp how often a hole is asked for again, and how
+	// often a quiet sender repeats its horizon: srtt + 4·mdev measured on that
+	// leg, held between these. Equal values fix the interval. 10 ms and 1 s.
+	NackMin, NackMax time.Duration
+	// HeadQuiet is how long a sender with chunks unacknowledged stays silent
+	// before telling the next hop how far it got. 10 ms.
+	HeadQuiet time.Duration
+	// AckEvery bounds how often a terminator reports its watermark when it has
+	// moved; AckRepeat re-announces it when it has not. 20 ms and 250 ms.
+	AckEvery, AckRepeat time.Duration
+	// ProbeMin and ProbeMax clamp the originator's blind re-send of its highest
+	// chunk: end-to-end srtt + 4·mdev, doubling on each try. 100 ms and 1 s.
+	ProbeMin, ProbeMax time.Duration
+}
+
+var defaultTimers = Timers{
+	Tick:      5 * time.Millisecond,
+	Ping:      time.Second,
+	NackMin:   10 * time.Millisecond,
+	NackMax:   time.Second,
+	HeadQuiet: 10 * time.Millisecond,
+	AckEvery:  20 * time.Millisecond,
+	AckRepeat: 250 * time.Millisecond,
+	ProbeMin:  100 * time.Millisecond,
+	ProbeMax:  time.Second,
+}
+
+func (t *Timers) fill() error {
+	for _, f := range []struct {
+		v   *time.Duration
+		def time.Duration
+	}{
+		{&t.Tick, defaultTimers.Tick}, {&t.Ping, defaultTimers.Ping},
+		{&t.NackMin, defaultTimers.NackMin}, {&t.NackMax, defaultTimers.NackMax},
+		{&t.HeadQuiet, defaultTimers.HeadQuiet},
+		{&t.AckEvery, defaultTimers.AckEvery}, {&t.AckRepeat, defaultTimers.AckRepeat},
+		{&t.ProbeMin, defaultTimers.ProbeMin}, {&t.ProbeMax, defaultTimers.ProbeMax},
+	} {
+		if *f.v == 0 {
+			*f.v = f.def
+		}
+		if *f.v < 0 {
+			return errors.New("tunnel: a timer cannot be negative")
+		}
+	}
+	if t.NackMin > t.NackMax {
+		return fmt.Errorf("tunnel: nack_min %v is above nack_max %v", t.NackMin, t.NackMax)
+	}
+	if t.ProbeMin > t.ProbeMax {
+		return fmt.Errorf("tunnel: probe_min %v is above probe_max %v", t.ProbeMin, t.ProbeMax)
+	}
+	return nil
+}
 
 // LinkConfig describes one leg. Addr is a plain IP for a peer that dials us,
 // because its source port is ephemeral, and host:port for a hop we dial.
@@ -48,6 +112,7 @@ type Options struct {
 	Window      int
 	Repair      time.Duration
 	Idle        time.Duration
+	Timers      Timers
 
 	maxChunk int
 }
@@ -91,6 +156,9 @@ func New(opt Options) (*Node, error) {
 	}
 	if opt.Idle == 0 {
 		opt.Idle = defaultIdle
+	}
+	if err := opt.Timers.fill(); err != nil {
+		return nil, err
 	}
 	opt.maxChunk = opt.MaxDatagram - nonceLen - 16 - dataHeader
 	if opt.maxChunk < 64 {
@@ -354,8 +422,8 @@ func (n *Node) live() []*Stream {
 }
 
 func (n *Node) timers() {
-	tick := time.NewTicker(tickEvery)
-	ping := time.NewTicker(pingEvery)
+	tick := time.NewTicker(n.opt.Timers.Tick)
+	ping := time.NewTicker(n.opt.Timers.Ping)
 	sweep := time.NewTicker(sweepEvery)
 	stat := time.NewTicker(statsEvery)
 	defer func() {

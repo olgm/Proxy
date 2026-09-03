@@ -52,7 +52,7 @@ Commands: `config`, `deploy`, `status`, `uninstall`.
 | `routes[].legs` | UDP only; `{from, to, duplicate}` per leg that should differ |
 | `routes[].exit` | node every path converges on. Implied by the end of `via` |
 | `routes[].paths` | UDP only; race several ways to the exit instead of one `via` |
-| `routes[].tunnel` | UDP only; `max_datagram`, `window`, `repair_ms`, `idle_ms` |
+| `routes[].tunnel` | UDP only; sizes, deadlines and every timer — see below |
 | `routes[].target` | final `addr`, plus `rewrite_host` / `rewrite_port` |
 | `routes[].whitelist` | optional; local `ign:uuid` file seeded onto the entry node |
 
@@ -151,6 +151,42 @@ Paths that share a leg share its packets — the shape is a graph and a node for
 to all of its successors — so two paths through the same leg must agree on its
 `duplicate`, or name it under `legs`. `config` refuses the topology if they don't,
 and refuses a set of paths whose edges form a loop.
+
+### Tuning
+
+`tunnel` is passed to every node on the route. Everything has a working default;
+the fields exist because the right value depends on the path, not on Minecraft.
+
+| field | default | meaning |
+| --- | --- | --- |
+| `max_datagram` | 1200 | whole datagram before IP and UDP headers |
+| `window` | 1 MiB | unacknowledged bytes one direction may hold before the entry stops reading the player |
+| `repair_ms` | 5000 | how long a hole may go unfilled before the session ends |
+| `idle_ms` | 120000 | a relay forgets a stream after this long without a datagram |
+| `tick_ms` | 5 | granularity of every timer below |
+| `ping_ms` | 1000 | per link; a link is called down after five unanswered |
+| `nack_min_ms`, `nack_max_ms` | 10, 1000 | clamp on how often a hole is asked for again, and on how often a quiet sender repeats its horizon: `RTT + 4·mdev` on that leg, held between these. Equal values fix it |
+| `head_quiet_ms` | 10 | how long a sender with chunks unacknowledged stays silent before saying how far it got |
+| `ack_ms`, `ack_repeat_ms` | 20, 250 | how often the exit reports what it has read when that moved, and when it has not |
+| `probe_min_ms`, `probe_max_ms` | 100, 1000 | clamp on the entry's blind re-send of its highest chunk, the backstop behind the horizon: end-to-end `RTT + 4·mdev`, doubling per try |
+
+Minecraft traffic is light — a few tens of KB/s at most — so all of these can be
+made a good deal more aggressive than the defaults without the extra packets
+costing anything a leg would notice. The defaults lean the other way. A setting to
+start from, for latency over thrift:
+
+```json
+"tunnel": {
+  "tick_ms": 1, "nack_min_ms": 5, "nack_max_ms": 50,
+  "head_quiet_ms": 3, "ack_ms": 5, "ack_repeat_ms": 50,
+  "probe_min_ms": 30, "probe_max_ms": 200
+}
+```
+
+`nack_max_ms` below a leg's RTT means asking again before the answer could have
+arrived, which costs a duplicate retransmit each time and buys back only the case
+where the request or the answer was lost. With `duplicate` on the leg that case is
+already rare, so leave that one near the RTT of the longest leg.
 
 ### Keys
 

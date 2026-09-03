@@ -10,17 +10,12 @@ import (
 	"time"
 )
 
-const (
-	// pingEvery also keeps the entry's ephemeral socket alive through any NAT
-	// between it and the next hop; the entry never binds a port of its own.
-	pingEvery = time.Second
-	minRTO    = 10 * time.Millisecond
-	maxRTO    = time.Second
-	// statsEvery governs the one line per link that says whether this leg is
-	// carrying UDP at all, and at what loss. It is the only way to answer that
-	// question from outside the node.
-	statsEvery = 30 * time.Second
-)
+// statsEvery governs the one line per link that says whether this leg is
+// carrying UDP at all, and at what loss. It is the only way to answer that
+// question from outside the node. The ping behind it is Timers.Ping, which also
+// keeps the entry's ephemeral socket alive through any NAT between it and the
+// next hop; the entry never binds a port of its own.
+const statsEvery = 30 * time.Second
 
 // Link is one node-to-node leg: the address of a peer, the key that leg is
 // authenticated with, and a round-trip estimate measured on it. A link is
@@ -68,12 +63,13 @@ func (l *Link) String() string {
 // rto is how long to wait before asking for a hole again. One round trip on this
 // leg is the whole point: a repair costs the leg, not the chain.
 func (l *Link) rto() time.Duration {
+	t := &l.sock.node.opt.Timers
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.srtt == 0 {
-		return 100 * time.Millisecond
+		return clamp(100*time.Millisecond, t.NackMin, t.NackMax)
 	}
-	return clamp(l.srtt+4*l.mdev, minRTO, maxRTO)
+	return clamp(l.srtt+4*l.mdev, t.NackMin, t.NackMax)
 }
 
 func clamp(d, lo, hi time.Duration) time.Duration {
@@ -175,7 +171,7 @@ func (l *Link) stats() (srtt, mdev time.Duration, s linkStats) {
 func (l *Link) up() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return !l.lastPong.IsZero() && time.Since(l.lastPong) < 5*pingEvery
+	return !l.lastPong.IsZero() && time.Since(l.lastPong) < 5*l.sock.node.opt.Timers.Ping
 }
 
 // socket is one UDP socket and the links reachable through it. A node has at most
