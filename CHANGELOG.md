@@ -103,6 +103,11 @@
 - Switched the live HK → Tokyo → Chicago chain to `transport: udp` with every packet
   duplicated, single path. Racing is implemented and tested but not deployed: with
   three nodes the only second path is HK → Chicago direct, which shares HK's uplink
-  with the relayed path. UDP on the HK leg is the risk to watch — China-route transit
-  commonly polices it — so the link lines are the thing to read after this change,
-  and `transport: tcp` is one edit and one deploy away.
+  with the relayed path. `transport: tcp` is one edit and one deploy away.
+- UDP is not penalised on either leg, which was the open question: HK→TY 43.8–44.1 ms
+  against 44.00 over TCP, TY→CHI 122.0–122.5 against 123.93, and mdev 0.1–0.4 where
+  TCP measured ~1.0. Ping loss 0.0% on both. Verified end to end by carrying 4 MiB
+  through the deployed chain to a throwaway socket on the exit — never Hypixel —
+  byte-exact in 2.10 s, which is the 1 MiB window over a 166 ms round trip rather
+  than anything the path is doing. Numbers and the two ways to mis-measure this are
+  in `agents/link-latency.md`.
