@@ -18,6 +18,7 @@ import (
 
 	"github.com/olgm/proxy/internal/mc"
 	"github.com/olgm/proxy/internal/mojang"
+	"github.com/olgm/proxy/internal/tunnel"
 	"github.com/olgm/proxy/internal/whitelist"
 )
 
@@ -39,13 +40,63 @@ type Config struct {
 }
 
 type Listener struct {
-	Bind     string `json:"bind"`
-	Upstream string `json:"upstream"`
+	// Net is what this listener accepts on: "tcp" (default) or "udp". Players
+	// always arrive over TCP, so the entry of a UDP tunnel is still a TCP
+	// listener — it is the hop after it that changes.
+	Net  string `json:"net,omitempty"`
+	Bind string `json:"bind"`
+	// Upstream is a TCP address dialled once per connection or stream. It is the
+	// next hop on a plain TCP chain, and the backend itself at the exit of a
+	// tunnel.
+	Upstream string `json:"upstream,omitempty"`
+	// Hops are the next nodes toward the exit, over UDP. Setting them replaces
+	// Upstream: this listener hands the stream to the tunnel instead of dialling.
+	// More than one is a race — every hop gets every chunk and the exit keeps
+	// whichever copy arrives first.
+	Hops []Link `json:"hops,omitempty"`
+	// Peers are the previous nodes, over UDP. Required on a UDP listener.
+	Peers []Link `json:"peers,omitempty"`
 	// AllowFrom is a list of source IPs or CIDRs. Empty means allow anyone, which
 	// is only correct for a public ingress: a relay left open is a free proxy to
-	// the backend, and the abuse lands on our egress IP.
+	// the backend, and the abuse lands on our egress IP. It applies to TCP only —
+	// over UDP a source address proves nothing, and the link key does this job.
 	AllowFrom []string   `json:"allow_from,omitempty"`
 	Minecraft *Minecraft `json:"minecraft,omitempty"`
+	Tunnel    *Tunnel    `json:"tunnel,omitempty"`
+}
+
+// Link is one leg of a tunnel, from this node's point of view.
+type Link struct {
+	// Addr is host:port for a hop we dial, and a bare IP for a peer that dials us:
+	// a node that dials uses an ephemeral source port, so there is none to match.
+	Addr string `json:"addr"`
+	// Key is a base64 32-byte key, unique per leg. Over UDP anyone can put the
+	// previous hop's address on a datagram, so this — not allow_from — is what
+	// keeps a relay from being an open reflector and a session from being injected
+	// into.
+	Key string `json:"key"`
+	// Duplicate is how many copies of each chunk this node sends when it is the one
+	// putting them on the wire: the entry going out, the exit coming back. A chunk
+	// merely passing through a relay is forwarded once per copy received, so the
+	// count set where the stream enters the tunnel is the count that crosses every
+	// leg. Default 1.
+	Duplicate int `json:"duplicate,omitempty"`
+}
+
+// Tunnel is optional tuning. Everything here has a working default; the fields
+// exist because the right value depends on the path, not on Minecraft.
+type Tunnel struct {
+	// MaxDatagram bounds a datagram before IP and UDP headers. Lower it if a leg
+	// runs inside another tunnel and 1200 no longer fits.
+	MaxDatagram int `json:"max_datagram,omitempty"`
+	// Window is how many unacknowledged bytes one direction of one stream may hold
+	// before the sender stops reading from the socket behind it.
+	Window int `json:"window,omitempty"`
+	// RepairMS is how long a hole may go unfilled before the stream is declared
+	// unrecoverable and the session ends.
+	RepairMS int `json:"repair_ms,omitempty"`
+	// IdleMS reaps a relay's stream state after this long without a datagram.
+	IdleMS int `json:"idle_ms,omitempty"`
 }
 
 type Minecraft struct {
@@ -60,6 +111,17 @@ type server struct {
 	Listener
 	allow []netip.Prefix
 	wl    *whitelist.List
+	tun   *tunnel.Node
+}
+
+// halfCloser is whatever the next leg turns out to be: a TCP connection on a
+// plain chain, a tunnel stream on a UDP one. Both are byte pipes that can end one
+// direction without cutting off the other, which is what lets a client stop
+// talking while the server is still sending.
+type halfCloser interface {
+	io.ReadWriter
+	CloseWrite() error
+	Close() error
 }
 
 // newMojang builds the profile-API client backing the whitelist. A seam: tests
@@ -77,26 +139,36 @@ func Run(cfg *Config) error {
 		if err != nil {
 			return err
 		}
-		ln, err := net.Listen("tcp", l.Bind)
-		if err != nil {
-			return err
-		}
-		mode := "relay"
-		if l.Minecraft != nil {
-			mode = "minecraft->" + l.Minecraft.RewriteHost
-		}
-		allow := "any"
-		if len(l.AllowFrom) > 0 {
-			allow = strings.Join(l.AllowFrom, ",")
-		}
+		mode := l.Role()
 		if s.wl != nil {
 			mode += fmt.Sprintf(" whitelist=%s(%d)", l.Minecraft.Whitelist, s.wl.Len())
 			// Keeps the name column fresh enough that a released name stops
 			// matching here long before anyone else can claim it.
 			s.wl.StartRefresh()
 		}
-		log.Printf("listen %s -> %s [%s] allow=%s", l.Bind, l.Upstream, mode, allow)
+		guard := "allow=any"
+		if len(l.AllowFrom) > 0 {
+			guard = "allow=" + strings.Join(l.AllowFrom, ",")
+		}
+		if l.Net == "udp" {
+			guard = "peers=" + strings.Join(l.PeerAddrs(), ",")
+		}
+		log.Printf("listen %s %s -> %s [%s] %s", l.Network(), l.Bind, l.Next(), mode, guard)
+
 		wg.Add(1)
+		if l.Net == "udp" {
+			// The tunnel node is the listener: it bound its own socket when it was
+			// built, and hands us streams instead of connections.
+			go func() {
+				defer wg.Done()
+				s.serveTunnel()
+			}()
+			continue
+		}
+		ln, err := net.Listen("tcp", l.Bind)
+		if err != nil {
+			return err
+		}
 		go func() {
 			defer wg.Done()
 			s.accept(ln)
@@ -106,9 +178,76 @@ func Run(cfg *Config) error {
 	return nil
 }
 
+// Role is what this listener does, which is not configured anywhere: it follows
+// from which fields are set. A Minecraft block makes it an ingress, a UDP
+// listener that dials the target rather than another hop is a tunnel's exit, and
+// anything else passes bytes along.
+func (l Listener) Role() string {
+	switch {
+	case l.Minecraft != nil:
+		return "minecraft->" + l.Minecraft.RewriteHost
+	case l.Net == "udp" && l.Upstream != "":
+		return "exit"
+	default:
+		return "relay"
+	}
+}
+
+// Network is what this listener accepts on, defaulted.
+func (l Listener) Network() string {
+	if l.Net == "udp" {
+		return "udp"
+	}
+	return "tcp"
+}
+
+// Next describes where this listener sends: one TCP address, or every path of a
+// tunnel with the copies each one carries. proxyctl prints the same thing, so a
+// preview and a running node describe themselves the same way.
+func (l Listener) Next() string {
+	if len(l.Hops) == 0 {
+		return l.Upstream
+	}
+	parts := make([]string, 0, len(l.Hops))
+	for _, h := range l.Hops {
+		p := h.Addr
+		if h.Duplicate > 1 {
+			p += fmt.Sprintf("x%d", h.Duplicate)
+		}
+		parts = append(parts, p)
+	}
+	return "udp:" + strings.Join(parts, "+")
+}
+
+// PeerAddrs are the addresses a UDP listener will answer, for the same reason.
+func (l Listener) PeerAddrs() []string {
+	out := make([]string, 0, len(l.Peers))
+	for _, p := range l.Peers {
+		out = append(out, p.Addr)
+	}
+	return out
+}
+
 func newServer(l Listener) (*server, error) {
-	if l.Bind == "" || l.Upstream == "" {
-		return nil, fmt.Errorf("listener %q: bind and upstream are both required", l.Bind)
+	switch l.Net {
+	case "", "tcp", "udp":
+	default:
+		return nil, fmt.Errorf("listener %s: net must be tcp or udp, not %q", l.Bind, l.Net)
+	}
+	if l.Bind == "" {
+		return nil, fmt.Errorf("listener: bind is required")
+	}
+	if (l.Upstream == "") == (len(l.Hops) == 0) {
+		return nil, fmt.Errorf("listener %s: set exactly one of upstream and hops", l.Bind)
+	}
+	if l.Net == "udp" && len(l.Peers) == 0 {
+		return nil, fmt.Errorf("listener %s: a udp listener needs peers to authenticate", l.Bind)
+	}
+	if l.Net != "udp" && len(l.Peers) > 0 {
+		return nil, fmt.Errorf("listener %s: peers only mean something on a udp listener", l.Bind)
+	}
+	if l.Net == "udp" && l.Minecraft != nil {
+		return nil, fmt.Errorf("listener %s: a Minecraft block belongs on the tcp listener players reach", l.Bind)
 	}
 	s := &server{Listener: l}
 	for _, a := range l.AllowFrom {
@@ -127,7 +266,54 @@ func newServer(l Listener) (*server, error) {
 		}
 		s.wl = wl
 	}
+	if len(l.Hops) > 0 || len(l.Peers) > 0 {
+		t, err := newTunnel(l)
+		if err != nil {
+			return nil, err
+		}
+		s.tun = t
+	}
 	return s, nil
+}
+
+func newTunnel(l Listener) (*tunnel.Node, error) {
+	opt := tunnel.Options{Name: l.Bind}
+	if l.Net == "udp" {
+		opt.Bind = l.Bind
+	}
+	var err error
+	if opt.Peers, err = tunnelLinks(l.Peers); err != nil {
+		return nil, fmt.Errorf("listener %s: peers: %w", l.Bind, err)
+	}
+	if opt.Hops, err = tunnelLinks(l.Hops); err != nil {
+		return nil, fmt.Errorf("listener %s: hops: %w", l.Bind, err)
+	}
+	if t := l.Tunnel; t != nil {
+		opt.MaxDatagram = t.MaxDatagram
+		opt.Window = t.Window
+		opt.Repair = time.Duration(t.RepairMS) * time.Millisecond
+		opt.Idle = time.Duration(t.IdleMS) * time.Millisecond
+	}
+	n, err := tunnel.New(opt)
+	if err != nil {
+		return nil, fmt.Errorf("listener %s: %w", l.Bind, err)
+	}
+	return n, nil
+}
+
+func tunnelLinks(in []Link) ([]tunnel.LinkConfig, error) {
+	out := make([]tunnel.LinkConfig, 0, len(in))
+	for _, l := range in {
+		if l.Addr == "" {
+			return nil, errors.New("addr is required")
+		}
+		k, err := tunnel.DecodeKey(l.Key)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", l.Addr, err)
+		}
+		out = append(out, tunnel.LinkConfig{Addr: l.Addr, Key: k, Dup: l.Duplicate})
+	}
+	return out, nil
 }
 
 func parsePrefix(s string) (netip.Prefix, error) {
@@ -169,9 +355,9 @@ func (s *server) handle(c *net.TCPConn) {
 		s.handleMinecraft(c)
 		return
 	}
-	u, err := s.dial()
+	u, err := s.connect()
 	if err != nil {
-		log.Printf("%s: dial %s: %v", s.Bind, s.Upstream, err)
+		log.Printf("%s: open %s: %v", s.Bind, s.Next(), err)
 		return
 	}
 	defer u.Close()
@@ -213,9 +399,9 @@ func (s *server) handleMinecraft(c *net.TCPConn) {
 		h.Port = s.Minecraft.RewritePort
 	}
 
-	u, err := s.dial()
+	u, err := s.connect()
 	if err != nil {
-		log.Printf("%s: dial %s: %v", s.Bind, s.Upstream, err)
+		log.Printf("%s: open %s: %v", s.Bind, s.Next(), err)
 		return
 	}
 	defer u.Close()
@@ -240,6 +426,38 @@ func (s *server) handleMinecraft(c *net.TCPConn) {
 		}
 	}
 	relay(c, u)
+}
+
+// serveTunnel is the exit's accept loop. A relay never reaches the body: it has
+// hops of its own, so no stream ever terminates on it.
+func (s *server) serveTunnel() {
+	for {
+		st, err := s.tun.Accept()
+		if err != nil {
+			return
+		}
+		go s.serveStream(st)
+	}
+}
+
+func (s *server) serveStream(st *tunnel.Stream) {
+	defer st.Close()
+	u, err := s.dial()
+	if err != nil {
+		log.Printf("%s: dial %s: %v", s.Bind, s.Upstream, err)
+		return
+	}
+	defer u.Close()
+	relay(st, u)
+}
+
+// connect opens the next leg: a TCP dial on a plain chain, a tunnel stream when
+// the hop after this one runs over UDP.
+func (s *server) connect() (halfCloser, error) {
+	if len(s.Hops) > 0 {
+		return s.tun.Open()
+	}
+	return s.dial()
 }
 
 func (s *server) dial() (*net.TCPConn, error) {
@@ -286,9 +504,11 @@ func (s *server) allowed(a net.Addr) bool {
 // its own side on EOF rather than tearing down the whole connection, so a client
 // that stops sending doesn't cut off data still in flight from the server.
 //
-// Both ends are *net.TCPConn, so io.Copy uses splice(2) on Linux and the payload
-// never enters userspace.
-func relay(a, b *net.TCPConn) {
+// When both ends are *net.TCPConn this still reaches splice(2) on Linux and the
+// payload never enters userspace: io.Copy looks at the concrete type, which the
+// interface does not hide from it. A tunnel stream on one side gives that up,
+// because the bytes have to be numbered before they can be sent.
+func relay(a, b halfCloser) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go pipe(a, b, &wg)
@@ -296,7 +516,7 @@ func relay(a, b *net.TCPConn) {
 	wg.Wait()
 }
 
-func pipe(dst, src *net.TCPConn, wg *sync.WaitGroup) {
+func pipe(dst, src halfCloser, wg *sync.WaitGroup) {
 	defer wg.Done()
 	io.Copy(dst, src)
 	dst.CloseWrite()

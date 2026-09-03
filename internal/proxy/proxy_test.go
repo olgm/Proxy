@@ -59,7 +59,12 @@ func startNode(t *testing.T, l Listener) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { ln.Close() })
+	t.Cleanup(func() {
+		ln.Close()
+		if s.tun != nil {
+			s.tun.Close()
+		}
+	})
 	go s.accept(ln)
 	return ln.Addr().String()
 }
