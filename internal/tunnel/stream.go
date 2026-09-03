@@ -487,3 +487,9 @@ func (s *Stream) touch(now time.Time) {
 	s.lastSeen = now
 	s.mu.Unlock()
 }
+
+func (s *Stream) seen() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastSeen
+}

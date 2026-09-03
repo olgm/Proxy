@@ -121,6 +121,11 @@ func (l *Link) count(f func(*linkStats)) {
 }
 
 func (l *Link) ping() {
+	if l.remote.Load() == nil {
+		// A peer that has never spoken has no address to ping, and counting one
+		// would report a leg that has not been tried yet as 100% lost.
+		return
+	}
 	l.mu.Lock()
 	nonce := uint64(time.Now().UnixNano())
 	l.pending, l.sentAt = nonce, time.Now()

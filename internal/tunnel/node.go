@@ -370,7 +370,11 @@ func (n *Node) timers() {
 				if s.gone() {
 					continue
 				}
-				if dead {
+				// Both halves matter. No link answering is not enough on its own —
+				// a link is only called up once a pong has come back, so a node
+				// that has just started has none — and a stream still being fed is
+				// not stalled whatever the ping stream says.
+				if dead && now.Sub(s.seen()) > n.opt.Repair {
 					s.abort(ErrUnrepairable)
 					continue
 				}

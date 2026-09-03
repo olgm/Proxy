@@ -293,3 +293,16 @@ func TestUnrepairableStreamFails(t *testing.T) {
 		t.Fatal("reader hung on an unrepairable hole")
 	}
 }
+
+// A node that has just started has no link it can call up: a link is only up once
+// a pong has come back, and the first ping is a second away. A stream that arrives
+// in that window is being fed and must not be given up on.
+func TestFreshStreamSurvivesLinksNotYetUp(t *testing.T) {
+	entry, exit := chain(t, 1, 200*time.Millisecond, nil, nil)
+	// Past the repair window, before the first ping.
+	time.Sleep(500 * time.Millisecond)
+	body := payload(200 << 10)
+	if got := send(t, entry, exit, body); !bytes.Equal(got, body) {
+		t.Fatalf("got %d bytes, want %d", len(got), len(body))
+	}
+}
