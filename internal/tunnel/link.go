@@ -52,7 +52,7 @@ type Link struct {
 	st       linkStats
 }
 
-type linkStats struct{ sent, recv, rtx, pings, pongs, dropped uint64 }
+type linkStats struct{ sent, recv, rtx, pings, lost, dropped uint64 }
 
 func (l *Link) String() string {
 	if r := l.remote.Load(); r != nil {
@@ -127,6 +127,13 @@ func (l *Link) ping() {
 		return
 	}
 	l.mu.Lock()
+	// The previous ping is resolved here rather than at the end of the reporting
+	// window: counting sends and replies separately makes every ping still in
+	// flight when the window closes look lost, which on a 30 s window and a 1 s
+	// ping is a steady 3% that is not there.
+	if l.pending != 0 {
+		l.st.lost++
+	}
 	nonce := uint64(time.Now().UnixNano())
 	l.pending, l.sentAt = nonce, time.Now()
 	l.st.pings++
@@ -143,13 +150,13 @@ func (l *Link) pong(nonce uint64) {
 	r := time.Since(l.sentAt)
 	l.pending = 0
 	l.lastPong = time.Now()
-	l.st.pongs++
 	l.mu.Unlock()
 	l.sample(r)
 }
 
 // stats reports and resets the window. Loss is measured on the ping stream, which
-// is the only traffic guaranteed to exist on an idle link.
+// is the only traffic guaranteed to exist on an idle link. A ping still outstanding
+// when the window closes is carried into the next one rather than counted here.
 func (l *Link) stats() (srtt, mdev time.Duration, s linkStats) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

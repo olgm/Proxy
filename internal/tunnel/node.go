@@ -448,8 +448,8 @@ func (n *Node) logStats() {
 			continue
 		}
 		loss := 0.0
-		if s.pings > 0 && s.pings >= s.pongs {
-			loss = 100 * float64(s.pings-s.pongs) / float64(s.pings)
+		if s.pings > 0 {
+			loss = 100 * float64(s.lost) / float64(s.pings)
 		}
 		log.Printf("%s: link %s %s rtt=%.1fms mdev=%.1fms loss=%.1f%% sent=%d recv=%d rtx=%d dropped=%d",
 			n.opt.Name, l, upWord(l.up()), ms(srtt), ms(mdev), loss, s.sent, s.recv, s.rtx, s.dropped)
