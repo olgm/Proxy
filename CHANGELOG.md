@@ -76,6 +76,16 @@
   tunnel and de-duplicated only at the exit; it was wrong for a chain, because the
   count had to be the worst leg's count on every leg, and a relay could do nothing
   for the leg after it.
+- `proxyd`: a lost tail is found on the leg that lost it. Gap detection cannot see
+  past the last number that arrived, and Minecraft is bursty enough that the next
+  number may be a whole tick away, so a sender that has been quiet for 10 ms with
+  chunks unacknowledged tells the next hop its horizon; everything under it the
+  receiver has not seen becomes an ordinary hole, asked for on that leg and repaired
+  in one leg round trip. Repeated every leg RTO until acknowledged, so a lost advert
+  costs an RTO rather than the tail. Every sender does this, relays included. The
+  end-to-end probe stays as the backstop, and now fires only when the adverts are
+  lost too. An end-of-burst flag would have been the wrong tool: it rides on the
+  chunk that was lost.
 - `proxyd`: `paths` races several ways to one exit. Every path starts at the entry
   and ends at the exit; the exit keeps the first copy of each number and drops the
   rest, so a session gets the better path per packet rather than on average and

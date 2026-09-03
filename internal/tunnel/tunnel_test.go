@@ -250,41 +250,93 @@ func TestRelayDeduplicatesThenReduplicates(t *testing.T) {
 	}
 }
 
-// Gap detection cannot see a lost tail, so the originator re-sends its highest
-// chunk blind. When the leg that lost it is the one after a relay, that relay
-// already holds the chunk, and the probe has to get through it anyway: dropped
-// as one more copy, the exit's horizon would never reach the tail and the stream
-// would hang until it was given up on.
-func TestTailLossBehindARelayIsRepaired(t *testing.T) {
-	// One copy per leg, so the FIN crosses the second leg exactly once; and with
-	// nothing flowing back, it is the only datagram of its size headed that way.
-	fin := nonceLen + 16 + dataHeader
-	var dropped atomic.Bool
+// Sizes on the wire of the two datagrams a tail test needs to pick out. With one
+// copy per leg and nothing flowing back, each is the only datagram of its size
+// headed toward the exit: a FIN has no payload, and an ACK, the other 16-byte
+// body, travels the other way.
+const (
+	finSize  = nonceLen + 16 + dataHeader
+	headSize = nonceLen + 16 + 1 + 16
+)
+
+// tailChain is entry -> relay -> exit, one copy per leg, with a tap on each leg
+// toward the exit.
+func tailChain(t *testing.T, tap1, tap2 func(size int) bool) (entry, exit *Node) {
+	t.Helper()
 	k1, k2 := NewKey(), NewKey()
-	exit := mustNode(t, Options{Name: "exit", Bind: local("0"),
+	exit = mustNode(t, Options{Name: "exit", Bind: local("0"),
 		Peers: []LinkConfig{{Addr: "127.0.0.1", Key: k2}}})
-	w2 := newTappedWire(t, exit.Addr(), func(toRight bool, size int) bool {
-		return toRight && size == fin && dropped.CompareAndSwap(false, true)
-	})
+	w2 := newTappedWire(t, exit.Addr(), func(toRight bool, size int) bool { return toRight && tap2(size) })
 	relay := mustNode(t, Options{Name: "relay", Bind: local("0"),
 		Peers: []LinkConfig{{Addr: "127.0.0.1", Key: k1}},
 		Hops:  []LinkConfig{{Addr: w2.String(), Key: k2}}})
-	w1 := newWire(t, relay.Addr(), nil)
-	entry := mustNode(t, Options{Name: "entry",
+	w1 := newTappedWire(t, relay.Addr(), func(toRight bool, size int) bool { return toRight && tap1(size) })
+	entry = mustNode(t, Options{Name: "entry",
 		Hops: []LinkConfig{{Addr: w1.String(), Key: k1}}})
+	return entry, exit
+}
 
+func keep(int) bool { return false }
+
+// once drops the first datagram of the given size and nothing after it.
+func once(size int) func(int) bool {
+	var done atomic.Bool
+	return func(n int) bool { return n == size && done.CompareAndSwap(false, true) }
+}
+
+// probes is how many blind re-sends the entry made on its one stream.
+func probes(t *testing.T, entry *Node) int {
+	t.Helper()
+	live := entry.live()
+	if len(live) != 1 {
+		t.Fatalf("entry holds %d streams, want 1", len(live))
+	}
+	d := live[0].down
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.probes
+}
+
+// Gap detection cannot see a lost tail. A sender that goes quiet with chunks
+// unacknowledged advertises how far it got, so the hop after it can ask for the
+// tail on that leg, within a few milliseconds and without the end-to-end probe.
+// Whichever leg lost it: the entry advertises on the first, the relay on the
+// second.
+func TestLostTailIsFoundByTheHorizon(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		tap1, tap2 func(int) bool
+	}{
+		{"on the first leg", once(finSize), keep},
+		{"on the second leg", keep, once(finSize)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			entry, exit := tailChain(t, c.tap1, c.tap2)
+			body := payload(64 << 10)
+			if got := send(t, entry, exit, body); !bytes.Equal(got, body) {
+				t.Fatalf("got %d bytes, want %d", len(got), len(body))
+			}
+			if n := probes(t, entry); n != 0 {
+				t.Fatalf("the entry probed %d times; the horizon should have found the tail first", n)
+			}
+		})
+	}
+}
+
+// With the horizon adverts lost too, the originator's blind re-send of its
+// highest chunk is the last resort. When the leg that lost the tail is the one
+// after a relay, that relay already holds the chunk, and the probe has to get
+// through it anyway: dropped as one more copy, the exit's horizon would never
+// reach the tail and the stream would hang until it was given up on.
+func TestTailLossBehindARelayIsRepairedByTheProbe(t *testing.T) {
+	dropFin := once(finSize)
+	entry, exit := tailChain(t, keep, func(n int) bool { return n == headSize || dropFin(n) })
 	body := payload(64 << 10)
-	start := time.Now()
 	if got := send(t, entry, exit, body); !bytes.Equal(got, body) {
 		t.Fatalf("got %d bytes, want %d", len(got), len(body))
 	}
-	if !dropped.Load() {
-		t.Fatal("the FIN was never seen on the second leg")
-	}
-	// The first probe fires after one probe wait; anything near the repair
-	// deadline means it was not the probe that recovered the tail.
-	if took := time.Since(start); took > 3*time.Second {
-		t.Fatalf("tail took %v to recover", took)
+	if n := probes(t, entry); n == 0 {
+		t.Fatal("nothing but the probe could have found the tail, and it never fired")
 	}
 }
 

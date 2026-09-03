@@ -28,6 +28,11 @@ const (
 	msgPing  msgType = 4
 	msgPong  msgType = 5
 	msgReset msgType = 6
+	// msgHead advertises the sender's horizon on one leg: one past the highest
+	// sequence it has put on the wire. Gap detection cannot see a lost tail, so
+	// a sender that has gone quiet with chunks outstanding says how far it got,
+	// and the receiver turns everything it has not seen below that into holes.
+	msgHead msgType = 7
 )
 
 // flagFin marks the last chunk of a direction. Its payload may be empty: the
@@ -94,6 +99,12 @@ func appendAck(b []byte, stream, through uint64) []byte {
 	return binary.BigEndian.AppendUint64(b, through)
 }
 
+func appendHead(b []byte, stream, top uint64) []byte {
+	b = append(b, byte(msgHead))
+	b = binary.BigEndian.AppendUint64(b, stream)
+	return binary.BigEndian.AppendUint64(b, top)
+}
+
 func appendReset(b []byte, stream uint64) []byte {
 	b = append(b, byte(msgReset))
 	return binary.BigEndian.AppendUint64(b, stream)
@@ -132,7 +143,7 @@ func decode(b []byte) (packet, error) {
 		for i := range p.seqs {
 			p.seqs[i] = binary.BigEndian.Uint64(b[10+i*8:])
 		}
-	case msgAck:
+	case msgAck, msgHead:
 		if len(b) < 16 {
 			return packet{}, errShort
 		}

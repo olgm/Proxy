@@ -86,9 +86,11 @@ Every leg watches its own numbers. 100 and 102 arrive and 101 does not, so the
 receiver asks the node it came from for 101, and asks again every `RTT + 4·mdev` as
 measured on that leg by its own ping. A node asked for a chunk it never held wants
 it too, so the request walks back one leg at a time until it reaches somebody
-holding it. Gap detection is blind past the last number that arrived, so the sender
-also re-sends its highest chunk when nothing is being acknowledged, which turns a
-lost tail into an ordinary hole.
+holding it. Gap detection is blind past the last number that arrived, and Minecraft
+is bursty enough that the next number may be a whole tick away, so a sender that
+goes quiet with chunks unacknowledged tells the next hop how far it got, 10 ms after
+its last send. That turns a lost tail into ordinary holes on that leg. Behind that,
+the entry re-sends its highest chunk end to end when nothing is being acknowledged.
 
 A cumulative "delivered through N" travels the other way a few times a second. It
 frees the retransmit buffer at every hop it passes, and it is what stops the entry

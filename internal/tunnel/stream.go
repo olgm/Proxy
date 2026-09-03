@@ -33,6 +33,10 @@ const (
 	linger = 60 * time.Second
 	// maxHoles bounds how far ahead of itself a peer may claim to be.
 	maxHoles = 1 << 16
+	// headQuiet is how long a sender with chunks outstanding stays silent before
+	// telling the next hop how far it got. Minecraft is bursty, and a lost tail
+	// of a burst is otherwise invisible until the next burst reveals it.
+	headQuiet = 10 * time.Millisecond
 )
 
 type chunk struct {
@@ -77,6 +81,10 @@ type dir struct {
 	moved   time.Time // last time acked advanced, or the first send
 	srtt    time.Duration
 	mdev    time.Duration
+	// lastSent and lastHead drive the horizon advert: it goes out once the
+	// direction has been quiet for headQuiet, then again every leg RTO.
+	lastSent time.Time
+	lastHead time.Time
 
 	// Inbound state.
 	top     uint64 // one past the highest sequence seen
@@ -165,6 +173,18 @@ func (d *dir) transmit(c *chunk, rtx bool) {
 	for _, l := range d.send {
 		l.send(plain, l.dup, rtx)
 	}
+	d.mu.Lock()
+	d.lastSent = time.Now()
+	d.mu.Unlock()
+}
+
+// horizon is one past the highest sequence this node has put on its send links:
+// what it numbered where it originates, what it has seen where it forwards.
+func (d *dir) horizon() uint64 {
+	if d.originates() {
+		return d.next
+	}
+	return d.top
 }
 
 func encode(stream uint64, c *chunk, rtx bool) []byte {
@@ -182,21 +202,8 @@ func (d *dir) recv(p packet) {
 		d.mu.Unlock()
 		return
 	}
-	// Anything between the highest we had seen and this one is a hole. This is the
-	// whole detector: 100 and 102 arrive, so 101 is missing and gets asked for.
-	if p.seq >= d.top {
-		// The window stops any correct sender getting this far ahead, so a jump
-		// this large is a broken peer, and walking to it would hang the socket
-		// loop rather than lose a stream.
-		if p.seq-d.top > maxHoles {
-			d.mu.Unlock()
-			d.s.abort(ErrUnrepairable)
-			return
-		}
-		for s := d.top; s < p.seq; s++ {
-			d.want[s] = &hole{first: now}
-		}
-		d.top = p.seq + 1
+	if !d.advance(p.seq+1, now) {
+		return
 	}
 	delete(d.want, p.seq)
 
@@ -235,6 +242,42 @@ func (d *dir) recv(p packet) {
 	d.bufSize += len(c.data)
 	d.mu.Unlock()
 	d.transmit(c, false)
+}
+
+// advance moves the horizon to top. Anything between the highest we had seen and
+// there is a hole. This is the whole detector: 100 and 102 arrive, so 101 is
+// missing and gets asked for. Called with the lock held; reports false, with the
+// lock released, if the stream had to be aborted.
+func (d *dir) advance(top uint64, now time.Time) bool {
+	if top <= d.top {
+		return true
+	}
+	// The window stops any correct sender getting this far ahead, so a jump this
+	// large is a broken peer, and walking to it would hang the socket loop rather
+	// than lose a stream.
+	if top-d.top > maxHoles {
+		d.mu.Unlock()
+		d.s.abort(ErrUnrepairable)
+		return false
+	}
+	for s := d.top; s < top; s++ {
+		d.want[s] = &hole{first: now}
+	}
+	d.top = top
+	return true
+}
+
+// onHead learns how far the previous hop got. A tail it lost is now a set of
+// ordinary holes, asked for on the next tick.
+func (d *dir) onHead(top uint64) {
+	d.mu.Lock()
+	if d.err != nil {
+		d.mu.Unlock()
+		return
+	}
+	if d.advance(top, time.Now()) {
+		d.mu.Unlock()
+	}
 }
 
 func (d *dir) read(p []byte) (int, error) {
@@ -328,6 +371,7 @@ func (d *dir) tick(now time.Time) {
 	var (
 		ask   []uint64
 		ack   uint64
+		head  uint64
 		probe *chunk
 		dead  bool
 	)
@@ -336,7 +380,7 @@ func (d *dir) tick(now time.Time) {
 		d.mu.Unlock()
 		return
 	}
-	interval := backRTO(d.back)
+	interval := rtoOf(d.back)
 	for s, h := range d.want {
 		if now.Sub(h.first) > d.s.n.opt.Repair {
 			if d.terminates() {
@@ -357,6 +401,18 @@ func (d *dir) tick(now time.Time) {
 	if d.terminates() && d.deliver > 0 && now.Sub(d.lastAck) >= ackEvery &&
 		(d.deliver > d.sentAck || now.Sub(d.lastAck) >= ackRepeat) {
 		ack, d.sentAck, d.lastAck = d.deliver, d.deliver, now
+	}
+	// Quiet with chunks the far end has not acknowledged: say how far we got, so
+	// a tail lost on this leg is asked for on this leg, and again every leg RTO
+	// while it stays unacknowledged, in case the advert itself was lost.
+	if !d.terminates() && d.acked < d.horizon() && now.Sub(d.lastSent) >= headQuiet {
+		wait := headQuiet
+		if d.lastHead.After(d.lastSent) {
+			wait = rtoOf(d.send)
+		}
+		if now.Sub(d.lastHead) >= wait {
+			head, d.lastHead = d.horizon(), now
+		}
 	}
 	if d.originates() && d.acked < d.next && !d.moved.IsZero() {
 		if now.Sub(d.moved) >= d.probeWait() {
@@ -393,6 +449,12 @@ func (d *dir) tick(now time.Time) {
 	if ack > 0 {
 		plain := appendAck(nil, d.s.id, ack)
 		for _, l := range d.back {
+			l.send(plain, 1, false)
+		}
+	}
+	if head > 0 {
+		plain := appendHead(nil, d.s.id, head)
+		for _, l := range d.send {
 			l.send(plain, 1, false)
 		}
 	}
@@ -433,7 +495,7 @@ func (d *dir) probeWait() time.Duration {
 	return clamp(base<<min(d.probes, 3), 100*time.Millisecond, time.Second)
 }
 
-func backRTO(links []*Link) time.Duration {
+func rtoOf(links []*Link) time.Duration {
 	out := maxRTO
 	for _, l := range links {
 		out = min(out, l.rto())

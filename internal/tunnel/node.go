@@ -293,6 +293,11 @@ func (n *Node) handle(l *Link, p packet) {
 			return // closed, and kept only so a late NACK still finds an answer
 		}
 		data.recv(p)
+	case msgHead:
+		if s.gone() {
+			return
+		}
+		data.onHead(p.through)
 	case msgNack:
 		ctrl.onNack(l, p.seqs)
 	case msgAck:
