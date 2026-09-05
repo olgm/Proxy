@@ -21,8 +21,19 @@ type check struct {
 	why  string
 	// udp changes both how the link is tested and which rule opens it. A UDP port
 	// cannot be probed by connecting to it — that always succeeds — so the test is
-	// whether proxyd on the near side has had an answer from the far side.
+	// whether the near side has had an answer from the far side.
 	udp bool
+	// unit is the service whose journal proves that. Empty means proxyd; probed
+	// logs the same line for its own legs, which are separate ports and separate
+	// keys and so have to be proved separately.
+	unit string
+}
+
+func (c check) service() string {
+	if c.unit == "" {
+		return "proxyd"
+	}
+	return c.unit
 }
 
 func (c check) proto() string {
@@ -101,7 +112,7 @@ func verify(t *Topology, checks []check, roots map[string]bool) error {
 // socket distinguishes a filtered port from an open one.
 func linkUp(t *Topology, c check) bool {
 	cmd := fmt.Sprintf(
-		`journalctl -u proxyd -n 400 --no-pager -o cat 2>/dev/null | grep -F "link %s " | tail -1`, c.addr)
+		`journalctl -u %s -n 400 --no-pager -o cat 2>/dev/null | grep -F "link %s " | tail -1`, c.service(), c.addr)
 	// The far node has to be running and the two have to have exchanged a ping,
 	// which takes a second; give a blocked link long enough to prove it is blocked.
 	for i := 0; i < 6; i++ {
@@ -159,8 +170,8 @@ func ufwRule(t *Topology, c check) string {
 	if c.from == "" {
 		return fmt.Sprintf("ufw allow %s/%s comment 'proxyd entry'", port, c.proto())
 	}
-	return fmt.Sprintf("ufw allow from %s to any port %s proto %s comment 'proxyd %s from %s'",
-		t.Nodes[c.from].Addr, port, c.proto(), c.why, c.from)
+	return fmt.Sprintf("ufw allow from %s to any port %s proto %s comment '%s %s from %s'",
+		t.Nodes[c.from].Addr, port, c.proto(), c.service(), c.why, c.from)
 }
 
 // confirm returns false without asking when there is no terminal, so a scripted

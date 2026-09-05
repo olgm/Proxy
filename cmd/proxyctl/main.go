@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/olgm/proxy/internal/botcfg"
+	"github.com/olgm/proxy/internal/probe"
 	"github.com/olgm/proxy/internal/proxy"
 )
 
@@ -32,8 +33,15 @@ type Topology struct {
 	// Discord, when set, deploys the bot to one node. Delete the block to run
 	// without it.
 	Discord *Discord `json:"discord,omitempty"`
+	// Probe, when set, deploys probed beside proxyd on every node a production
+	// path touches. Delete the block and the chain is unchanged: it is a separate
+	// binary, unit and user, and proxyd does not know it exists.
+	Probe *Probe `json:"probe,omitempty"`
 
 	keys *keyring
+	// nextPort is where automatic allocation got to, so probed's ports carry on
+	// after the hops and the control links rather than colliding with them.
+	nextPort int
 }
 
 // Discord describes the bot: which server, what each role grants, and where it
@@ -223,13 +231,22 @@ func main() {
 	fail(err)
 	cfgs, checks, err := expand(t)
 	fail(err)
+	var pcfgs map[string]*probe.Config
+	if t.Probe != nil {
+		var pchecks []check
+		pcfgs, pchecks, _, err = expandProbe(t, t.nextPort)
+		fail(err)
+		checks = append(checks, pchecks...)
+	}
 
 	switch cmd {
 	case "config":
 		printConfigs(t, cfgs)
+		printProbe(t, pcfgs)
 	case "deploy":
 		printConfigs(t, cfgs)
-		fail(deploy(t, cfgs, checks, *repo))
+		printProbe(t, pcfgs)
+		fail(deploy(t, cfgs, pcfgs, checks, *repo))
 	case "status":
 		fail(status(t))
 	case "uninstall":
@@ -297,6 +314,14 @@ func load(path string) (*Topology, error) {
 	for i := range t.Routes {
 		if err := t.Routes[i].normalize(); err != nil {
 			return nil, err
+		}
+	}
+	if t.Probe != nil {
+		if t.Probe.Hz == 0 {
+			t.Probe.Hz = 1
+		}
+		if len(t.Probe.Windows) == 0 {
+			t.Probe.Windows = []string{"1m", "10m"}
 		}
 	}
 	if t.keys, err = loadKeys(path); err != nil {
@@ -465,6 +490,7 @@ func expand(t *Topology) (map[string]*proxy.Config, []check, error) {
 		cfgs[name].Control = c
 		next++
 	}
+	t.nextPort = next
 	return cfgs, checks, nil
 }
 
@@ -797,7 +823,7 @@ func marshal(c *proxy.Config) []byte {
 	return append(b, '\n')
 }
 
-func deploy(t *Topology, cfgs map[string]*proxy.Config, checks []check, repo string) error {
+func deploy(t *Topology, cfgs map[string]*proxy.Config, pcfgs map[string]*probe.Config, checks []check, repo string) error {
 	built := map[string]string{} // goarch -> local binary path
 	roots := map[string]bool{}   // node -> already root over ssh
 	seeds, err := t.whitelistSeeds()
@@ -823,7 +849,7 @@ func deploy(t *Topology, cfgs map[string]*proxy.Config, checks []check, repo str
 		node := t.Nodes[name]
 		fmt.Printf("== %s (%s)\n", name, node.SSH)
 
-		arch, root, err := probe(node.SSH)
+		arch, root, err := probeHost(node.SSH)
 		if err != nil {
 			return fmt.Errorf("%s: %w", name, err)
 		}
@@ -873,6 +899,13 @@ func deploy(t *Topology, cfgs map[string]*proxy.Config, checks []check, repo str
 			return err
 		}
 	}
+	// probed last: a leg should be carrying real traffic before anything asks it
+	// how well it does that.
+	if len(pcfgs) > 0 {
+		if err := deployProbe(t, pcfgs, tmp, repo, roots); err != nil {
+			return err
+		}
+	}
 	return verify(t, checks, roots)
 }
 
@@ -887,7 +920,7 @@ func deployBot(t *Topology, cfgs map[string]*proxy.Config, tmp, repo string, roo
 	if strings.ContainsAny(token, "\n\r'\\") {
 		return fmt.Errorf("DISCORD_BOT_TOKEN contains characters a token never has")
 	}
-	arch, root, err := probe(node.SSH)
+	arch, root, err := probeHost(node.SSH)
 	if err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}
@@ -916,9 +949,9 @@ func deployBot(t *Topology, cfgs map[string]*proxy.Config, tmp, repo string, roo
 	return nil
 }
 
-// probe reports the node's architecture and whether we are already root, so the
+// probeHost reports the node's architecture and whether we are already root, so the
 // install script can skip sudo on infrastructure that only permits root login.
-func probe(target string) (arch string, root bool, err error) {
+func probeHost(target string) (arch string, root bool, err error) {
 	out, err := ssh(target, "uname -m; id -u")
 	if err != nil {
 		return "", false, fmt.Errorf("%w\n%s", err, out)
@@ -1123,6 +1156,21 @@ journalctl -u proxyd -n 400 --no-pager -o cat 2>/dev/null |
   sort || true`)
 		fmt.Printf("== %s (%s)\n%s\n", name, node.Addr, indent(string(out)))
 	}
+	if t.Probe != nil {
+		for _, name := range sortedNodes(t) {
+			// The newest line per class, keyed on the class name, so a leg
+			// measured at two counts reports both.
+			out, _ := ssh(t.Nodes[name].SSH, `systemctl is-active probed 2>&1 | grep -q '^active' || exit 0
+journalctl -u probed -n 400 --no-pager -o cat 2>/dev/null |
+  awk '/ probe /{for(i=1;i<=NF;i++) if($i=="probe"){last[$(i+1)" "$(i+2)" "$(i+3)]=$0}}
+       END{for(k in last) print last[k]}' |
+  sort || true`)
+			if len(strings.TrimSpace(string(out))) == 0 {
+				continue
+			}
+			fmt.Printf("== %s probe\n%s\n", name, indent(string(out)))
+		}
+	}
 	if t.Discord != nil {
 		name := t.botNode()
 		out, _ := ssh(t.Nodes[name].SSH, `systemctl is-active proxybot 2>&1 || true
@@ -1136,13 +1184,17 @@ journalctl -u proxybot -n 300 --no-pager -o cat 2>/dev/null |
 func uninstall(t *Topology) error {
 	for _, name := range sortedNodes(t) {
 		node := t.Nodes[name]
-		_, root, err := probe(node.SSH)
+		_, root, err := probeHost(node.SSH)
 		if err != nil {
 			return fmt.Errorf("%s: %w", name, err)
 		}
 		sudo := "sudo -n"
 		if root {
 			sudo = ""
+		}
+		prb := ""
+		if t.Probe != nil {
+			prb = uninstallProbe()
 		}
 		bot := ""
 		if t.Discord != nil && t.botNode() == name {
@@ -1154,10 +1206,11 @@ SUDO="%s"
 $SUDO systemctl disable --now proxyd >/dev/null 2>&1 || true
 $SUDO rm -f /etc/systemd/system/proxyd.service /usr/local/bin/proxyd /etc/proxyd/config.json
 %s
+%s
 $SUDO rmdir /etc/proxyd 2>/dev/null || true
 $SUDO systemctl daemon-reload
 echo removed
-`, sudo, bot))
+`, sudo, bot, prb))
 		if err != nil {
 			return fmt.Errorf("%s: %w\n%s", name, err, out)
 		}

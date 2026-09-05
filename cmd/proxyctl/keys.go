@@ -61,6 +61,23 @@ func (k *keyring) get(route, a, b string) string {
 	return v
 }
 
+// probe returns the key sealing one leg of the measurement service. It is not the
+// leg's tunnel key on purpose: probed runs as its own user and holds only these,
+// so having them is not a way into a live session.
+func (k *keyring) probe(a, b string) string {
+	if a > b {
+		a, b = b, a
+	}
+	id := "probe|" + a + "|" + b
+	if v, ok := k.keys[id]; ok {
+		return v
+	}
+	v := tunnel.EncodeKey(tunnel.NewKey())
+	k.keys[id] = v
+	k.dirty = true
+	return v
+}
+
 // control returns the key sealing one node's control link. The bot's node is
 // given every entry's; each entry holds only its own.
 func (k *keyring) control(node string) string {
