@@ -8,18 +8,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/olgm/proxy/internal/botcfg"
 	"github.com/olgm/proxy/internal/control"
 )
 
-// Role is what a Discord role grants. Accounts is how many a member holding it
-// may whitelist; Manage lets them act on anyone's lines, with no cap on their
-// own. A member with several roles gets the highest cap and manage if any of
-// them says so.
-type Role struct {
-	Accounts int  `json:"accounts,omitempty"`
-	Manage   bool `json:"manage,omitempty"`
-}
-
+// grant is what a member may do, from every configured role they hold; see
+// botcfg.Role.
 type grant struct {
 	accounts int
 	manage   bool
@@ -86,7 +80,7 @@ type membersAPI interface {
 }
 
 type bot struct {
-	cfg     *config
+	cfg     *botcfg.Config
 	chain   *chain
 	adds    *limiter
 	members membersAPI

@@ -37,6 +37,16 @@
   needed. Every change is logged, and posted to an audit channel when one is set.
   The bot holds no state of its own. It depends on `github.com/bwmarrin/discordgo`;
   proxyd's import graph stays stdlib.
+- `proxyctl`: a `discord` block in the topology deploys the bot. Its node may
+  connect to every entry's control link, and `deploy` checks its way to each
+  entry it does not live on and offers the firewall rule, as for a hop. The bot
+  gets `/etc/proxyd/bot.json` with every entry's control address and key, its own
+  unprivileged account and hardened unit, and the token from `DISCORD_BOT_TOKEN`
+  in the operator's environment, carried inside the install script over ssh into
+  a root-only `/etc/proxyd/bot.env` the unit reads: never on a command line, never
+  through `/tmp`. A redeploy without the token keeps the file. `status` and
+  `uninstall` cover the bot. `topology.example.json` carries a `discord` block
+  with placeholder ids; delete it to run without the bot.
 - `proxyd`: config-driven relay node. Handshake rewrite (Forge markers preserved,
   BungeeCord identity stripped), source-IP allowlist, `splice(2)` relay with
   per-direction half-close, legacy `0xFE` ping rejected.

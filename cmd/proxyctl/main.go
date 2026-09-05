@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/olgm/proxy/internal/botcfg"
 	"github.com/olgm/proxy/internal/proxy"
 )
 
@@ -28,8 +29,24 @@ type Topology struct {
 	BasePort int             `json:"base_port"`
 	Nodes    map[string]Node `json:"nodes"`
 	Routes   []Route         `json:"routes"`
+	// Discord, when set, deploys the bot to one node. Delete the block to run
+	// without it.
+	Discord *Discord `json:"discord,omitempty"`
 
 	keys *keyring
+}
+
+// Discord describes the bot: which server, what each role grants, and where it
+// runs. See cmd/proxybot and agents/control-plane.md.
+type Discord struct {
+	// Node runs the bot. Defaults to the primary: the first entry with a
+	// whitelist, in route order. A Node that is itself such an entry becomes
+	// the primary instead.
+	Node  string                 `json:"node,omitempty"`
+	Guild string                 `json:"guild"`
+	Roles map[string]botcfg.Role `json:"roles"`
+	// AuditChannel gets one line per change, when set.
+	AuditChannel string `json:"audit_channel,omitempty"`
 }
 
 type Node struct {
@@ -259,6 +276,9 @@ func load(path string) (*Topology, error) {
 	if t.keys, err = loadKeys(path); err != nil {
 		return nil, err
 	}
+	if err := t.checkDiscord(); err != nil {
+		return nil, err
+	}
 	seeds, err := t.whitelistSeeds()
 	if err != nil {
 		return nil, err
@@ -270,6 +290,63 @@ func load(path string) (*Topology, error) {
 		}
 	}
 	return &t, nil
+}
+
+// whitelistedEntries lists the entry nodes that hold a whitelist, in route
+// order. The first is the primary unless the bot's node is one of them.
+func (t *Topology) whitelistedEntries() []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, r := range t.Routes {
+		if r.Whitelist != "" && !seen[r.Entry] {
+			seen[r.Entry] = true
+			out = append(out, r.Entry)
+		}
+	}
+	return out
+}
+
+// botNode is where the bot runs, and primary the entry it writes to first.
+func (t *Topology) botNode() string {
+	if t.Discord != nil && t.Discord.Node != "" {
+		return t.Discord.Node
+	}
+	return t.primary()
+}
+
+func (t *Topology) primary() string {
+	entries := t.whitelistedEntries()
+	if t.Discord != nil {
+		for _, e := range entries {
+			if e == t.Discord.Node {
+				return e
+			}
+		}
+	}
+	if len(entries) == 0 {
+		return ""
+	}
+	return entries[0]
+}
+
+func (t *Topology) checkDiscord() error {
+	d := t.Discord
+	if d == nil {
+		return nil
+	}
+	if d.Guild == "" {
+		return fmt.Errorf("discord: guild is required")
+	}
+	if len(d.Roles) == 0 {
+		return fmt.Errorf("discord: no roles: nobody could use the bot")
+	}
+	if len(t.whitelistedEntries()) == 0 {
+		return fmt.Errorf("discord: no route has a whitelist; the bot would have nothing to manage")
+	}
+	if _, ok := t.Nodes[t.botNode()]; !ok {
+		return fmt.Errorf("discord: unknown node %q", d.Node)
+	}
+	return nil
 }
 
 // whitelistSeeds maps each entry node to the local list file seeded onto it.
@@ -319,20 +396,54 @@ func expand(t *Topology) (map[string]*proxy.Config, []check, error) {
 	}
 
 	// Every entry that holds a whitelist gets a control link, on the ports after
-	// the hops. Only loopback may connect until a discord block names the bot's
-	// node; that is enough for proxyctl, which arrives over ssh.
+	// the hops. Only loopback may connect, which is enough for proxyctl over
+	// ssh, until a discord block names the bot's node; then that node may too,
+	// and its way in to every entry it does not live on is checked like a hop.
 	seeds, err := t.whitelistSeeds()
 	if err != nil {
 		return nil, nil, err
 	}
+	bot := ""
+	if t.Discord != nil {
+		bot = t.botNode()
+	}
 	for _, name := range sortedKeys(seeds) {
-		cfgs[name].Control = &proxy.Control{
+		c := &proxy.Control{
 			Bind: bindAddr(t.Nodes[name].BindAddr, next),
 			Key:  t.keys.control(name),
 		}
+		if bot != "" {
+			c.AllowFrom = []string{t.Nodes[bot].Addr}
+			if bot != name {
+				checks = append(checks, check{from: bot, to: name, why: "control", port: next,
+					addr: net.JoinHostPort(t.Nodes[name].Addr, strconv.Itoa(next))})
+			}
+		}
+		cfgs[name].Control = c
 		next++
 	}
 	return cfgs, checks, nil
+}
+
+// botConfig is /etc/proxyd/bot.json for the bot's node: every entry's control
+// address and key, and which one is the primary.
+func botConfig(t *Topology, cfgs map[string]*proxy.Config) *botcfg.Config {
+	bc := &botcfg.Config{
+		Guild:        t.Discord.Guild,
+		Roles:        t.Discord.Roles,
+		AuditChannel: t.Discord.AuditChannel,
+		Primary:      t.primary(),
+	}
+	for _, name := range t.whitelistedEntries() {
+		c := cfgs[name].Control
+		_, port, _ := net.SplitHostPort(c.Bind)
+		bc.Entries = append(bc.Entries, botcfg.Entry{
+			Node: name,
+			Addr: net.JoinHostPort(t.Nodes[name].Addr, port),
+			Key:  c.Key,
+		})
+	}
+	return bc
 }
 
 func sortedKeys(m map[string]string) []string {
@@ -623,6 +734,15 @@ func printConfigs(t *Topology, cfgs map[string]*proxy.Config) {
 			fmt.Printf("    %-3s %-22s    %-32s %-28s %s\n", "tcp", c.Bind, "", "control", guard)
 		}
 	}
+	if t.Discord != nil {
+		bc := botConfig(t, cfgs)
+		var entries []string
+		for _, e := range bc.Entries {
+			entries = append(entries, e.Node+"="+e.Addr)
+		}
+		fmt.Printf("bot on %s: guild %s, primary %s, entries %s\n",
+			t.botNode(), bc.Guild, bc.Primary, strings.Join(entries, " "))
+	}
 	fmt.Println()
 }
 
@@ -663,7 +783,7 @@ func deploy(t *Topology, cfgs map[string]*proxy.Config, checks []check, repo str
 		bin, ok := built[arch]
 		if !ok {
 			bin = filepath.Join(tmp, "proxyd-"+arch)
-			if err := build(repo, arch, bin); err != nil {
+			if err := build(repo, "./cmd/proxyd", arch, bin); err != nil {
 				return fmt.Errorf("build %s: %w", arch, err)
 			}
 			built[arch] = bin
@@ -692,7 +812,52 @@ func deploy(t *Topology, cfgs map[string]*proxy.Config, checks []check, repo str
 		}
 		fmt.Printf("   install  %s", lastLines(out, 2))
 	}
+	if t.Discord != nil {
+		if err := deployBot(t, cfgs, tmp, repo, roots); err != nil {
+			return err
+		}
+	}
 	return verify(t, checks, roots)
+}
+
+// deployBot installs proxybot on its node, after every proxyd, so the control
+// links it will dial are already answering.
+func deployBot(t *Topology, cfgs map[string]*proxy.Config, tmp, repo string, roots map[string]bool) error {
+	name := t.botNode()
+	node := t.Nodes[name]
+	fmt.Printf("== %s (%s) bot\n", name, node.SSH)
+
+	token := os.Getenv("DISCORD_BOT_TOKEN")
+	if strings.ContainsAny(token, "\n\r'\\") {
+		return fmt.Errorf("DISCORD_BOT_TOKEN contains characters a token never has")
+	}
+	arch, root, err := probe(node.SSH)
+	if err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	roots[name] = root
+	bin := filepath.Join(tmp, "proxybot-"+arch)
+	if err := build(repo, "./cmd/proxybot", arch, bin); err != nil {
+		return fmt.Errorf("build proxybot %s: %w", arch, err)
+	}
+	fmt.Printf("   build    linux/%s\n", arch)
+	b, _ := json.MarshalIndent(botConfig(t, cfgs), "", "  ")
+	cfgPath := filepath.Join(tmp, "bot.json")
+	if err := os.WriteFile(cfgPath, append(b, '\n'), 0o600); err != nil {
+		return err
+	}
+	if err := scp(node.SSH, bin, "/tmp/proxybot.new"); err != nil {
+		return fmt.Errorf("%s: upload proxybot: %w", name, err)
+	}
+	if err := scp(node.SSH, cfgPath, "/tmp/proxybot.config.json"); err != nil {
+		return fmt.Errorf("%s: upload bot config: %w", name, err)
+	}
+	out, err := ssh(node.SSH, installBotScript(root, token))
+	if err != nil {
+		return fmt.Errorf("%s: install proxybot: %w\n%s", name, err, out)
+	}
+	fmt.Printf("   install  %s", lastLines(out, 2))
+	return nil
 }
 
 // probe reports the node's architecture and whether we are already root, so the
@@ -717,8 +882,8 @@ func probe(target string) (arch string, root bool, err error) {
 	return arch, f[1] == "0", nil
 }
 
-func build(repo, arch, out string) error {
-	cmd := exec.Command("go", "build", "-trimpath", "-ldflags", "-s -w", "-o", out, "./cmd/proxyd")
+func build(repo, pkg, arch, out string) error {
+	cmd := exec.Command("go", "build", "-trimpath", "-ldflags", "-s -w", "-o", out, pkg)
 	cmd.Dir = repo
 	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH="+arch, "CGO_ENABLED=0")
 	if b, err := cmd.CombinedOutput(); err != nil {
@@ -814,6 +979,71 @@ $SUDO systemctl is-active proxyd
 `, sudo, user, whitelistDir, seed, user)
 }
 
+// installBotScript installs proxybot beside proxyd. The token travels inside
+// this script, over ssh's stdin, into a root-only file the unit reads: never on
+// a command line, never through /tmp. Without a token in the environment an
+// existing file is kept, so a redeploy does not need it.
+func installBotScript(root bool, token string) string {
+	sudo := "sudo -n"
+	if root {
+		sudo = ""
+	}
+	env := `[ -f /etc/proxyd/bot.env ] || {
+  echo "DISCORD_BOT_TOKEN is not set and this node has no /etc/proxyd/bot.env yet: put it in .env and source it" >&2
+  exit 1
+}`
+	if token != "" {
+		env = `$SUDO install -m 0600 -o root -g root /dev/stdin /etc/proxyd/bot.env <<'ENV'
+DISCORD_BOT_TOKEN=` + token + `
+ENV`
+	}
+	return fmt.Sprintf(`set -eu
+SUDO="%s"
+NOLOGIN=$(command -v nologin || echo /bin/false)
+
+id -u proxybot >/dev/null 2>&1 || \
+  $SUDO useradd --system --no-create-home --shell "$NOLOGIN" proxybot
+
+$SUDO install -m 0755 /tmp/proxybot.new /usr/local/bin/proxybot
+$SUDO install -d -m 0755 /etc/proxyd
+$SUDO install -m 0640 -o root -g proxybot /tmp/proxybot.config.json /etc/proxyd/bot.json
+rm -f /tmp/proxybot.new /tmp/proxybot.config.json
+%s
+
+$SUDO tee /etc/systemd/system/proxybot.service >/dev/null <<'UNIT'
+[Unit]
+Description=proxybot
+After=network-online.target proxyd.service
+Wants=network-online.target
+
+[Service]
+User=proxybot
+EnvironmentFile=/etc/proxyd/bot.env
+ExecStart=/usr/local/bin/proxybot -c /etc/proxyd/bot.json
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+$SUDO systemctl daemon-reload
+$SUDO systemctl enable proxybot >/dev/null 2>&1
+$SUDO systemctl restart proxybot
+sleep 2
+$SUDO systemctl is-active proxybot
+`, sudo, env)
+}
+
 func status(t *Topology) error {
 	for _, name := range sortedNodes(t) {
 		node := t.Nodes[name]
@@ -830,6 +1060,13 @@ journalctl -u proxyd -n 400 --no-pager -o cat 2>/dev/null |
   sort || true`)
 		fmt.Printf("== %s (%s)\n%s\n", name, node.Addr, indent(string(out)))
 	}
+	if t.Discord != nil {
+		name := t.botNode()
+		out, _ := ssh(t.Nodes[name].SSH, `systemctl is-active proxybot 2>&1 || true
+journalctl -u proxybot -n 300 --no-pager -o cat 2>/dev/null |
+  grep -E '^(discord|reconcile|audit|prune):|DISCORD_BOT_TOKEN' | tail -3 || true`)
+		fmt.Printf("== %s bot\n%s\n", name, indent(string(out)))
+	}
 	return nil
 }
 
@@ -844,14 +1081,20 @@ func uninstall(t *Topology) error {
 		if root {
 			sudo = ""
 		}
+		bot := ""
+		if t.Discord != nil && t.botNode() == name {
+			bot = `$SUDO systemctl disable --now proxybot >/dev/null 2>&1 || true
+$SUDO rm -f /etc/systemd/system/proxybot.service /usr/local/bin/proxybot /etc/proxyd/bot.json /etc/proxyd/bot.env`
+		}
 		out, err := ssh(node.SSH, fmt.Sprintf(`set -u
 SUDO="%s"
 $SUDO systemctl disable --now proxyd >/dev/null 2>&1 || true
 $SUDO rm -f /etc/systemd/system/proxyd.service /usr/local/bin/proxyd /etc/proxyd/config.json
+%s
 $SUDO rmdir /etc/proxyd 2>/dev/null || true
 $SUDO systemctl daemon-reload
 echo removed
-`, sudo))
+`, sudo, bot))
 		if err != nil {
 			return fmt.Errorf("%s: %w\n%s", name, err, out)
 		}

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/olgm/proxy/internal/botcfg"
 	"github.com/olgm/proxy/internal/control"
 	"github.com/olgm/proxy/internal/mojang"
 	"github.com/olgm/proxy/internal/tunnel"
@@ -68,7 +69,7 @@ func (n *fakeNode) write(t *testing.T, body string) {
 	}
 }
 
-func startNode(t *testing.T, name string) (entryConfig, *fakeNode) {
+func startNode(t *testing.T, name string) (botcfg.Entry, *fakeNode) {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), name+".txt")
 	if err := os.WriteFile(p, []byte("# "+name+"\n"), 0o640); err != nil {
@@ -89,7 +90,7 @@ func startNode(t *testing.T, name string) (entryConfig, *fakeNode) {
 	}
 	t.Cleanup(func() { ln.Close() })
 	go s.Serve(ln)
-	return entryConfig{Node: name, Addr: ln.Addr().String(), Key: tunnel.EncodeKey(key)}, &fakeNode{path: p, ln: ln}
+	return botcfg.Entry{Node: name, Addr: ln.Addr().String(), Key: tunnel.EncodeKey(key)}, &fakeNode{path: p, ln: ln}
 }
 
 type fakeMembers struct {
@@ -109,15 +110,15 @@ func newBot(t *testing.T) (*bot, *fakeNode, *fakeNode, *fakeMembers) {
 	t.Helper()
 	hkCfg, hk := startNode(t, "hk")
 	tyCfg, ty := startNode(t, "ty")
-	cfg := &config{
+	cfg := &botcfg.Config{
 		Guild: "guild",
-		Roles: map[string]Role{
+		Roles: map[string]botcfg.Role{
 			memberRole:  {Accounts: 1},
 			boosterRole: {Accounts: 3},
 			managerRole: {Manage: true},
 		},
 		Primary: "hk",
-		Entries: []entryConfig{hkCfg, tyCfg},
+		Entries: []botcfg.Entry{hkCfg, tyCfg},
 	}
 	ch, err := newChain(cfg)
 	if err != nil {
@@ -367,12 +368,12 @@ func TestLoadConfigRejectsUseless(t *testing.T) {
 		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := loadConfig(p); err == nil {
+		if _, err := botcfg.Load(p); err == nil {
 			t.Errorf("%s accepted", body)
 		}
 	}
 	// A primary that is not an entry is caught by the chain.
-	cfg := &config{Primary: "sg", Entries: []entryConfig{{Node: "hk", Addr: "a", Key: tunnel.EncodeKey(tunnel.NewKey())}}}
+	cfg := &botcfg.Config{Primary: "sg", Entries: []botcfg.Entry{{Node: "hk", Addr: "a", Key: tunnel.EncodeKey(tunnel.NewKey())}}}
 	if _, err := newChain(cfg); err == nil {
 		t.Error("a primary outside the entries was accepted")
 	}

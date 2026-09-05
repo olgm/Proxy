@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/olgm/proxy/internal/botcfg"
 	"github.com/olgm/proxy/internal/control"
 	"github.com/olgm/proxy/internal/tunnel"
 )
@@ -24,7 +25,7 @@ type chain struct {
 	others  []entry
 }
 
-func newChain(cfg *config) (*chain, error) {
+func newChain(cfg *botcfg.Config) (*chain, error) {
 	ch := &chain{}
 	for _, e := range cfg.Entries {
 		key, err := tunnel.DecodeKey(e.Key)

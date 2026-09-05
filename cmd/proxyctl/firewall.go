@@ -159,8 +159,8 @@ func ufwRule(t *Topology, c check) string {
 	if c.from == "" {
 		return fmt.Sprintf("ufw allow %s/%s comment 'proxyd entry'", port, c.proto())
 	}
-	return fmt.Sprintf("ufw allow from %s to any port %s proto %s comment 'proxyd hop from %s'",
-		t.Nodes[c.from].Addr, port, c.proto(), c.from)
+	return fmt.Sprintf("ufw allow from %s to any port %s proto %s comment 'proxyd %s from %s'",
+		t.Nodes[c.from].Addr, port, c.proto(), c.why, c.from)
 }
 
 // confirm returns false without asking when there is no terminal, so a scripted

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/olgm/proxy/internal/botcfg"
 	"github.com/olgm/proxy/internal/proxy"
 )
 
@@ -368,6 +370,132 @@ func TestNoControlLinkWithoutWhitelist(t *testing.T) {
 	for n, c := range cfgs {
 		if c.Control != nil {
 			t.Errorf("%s has a control link with no whitelist to manage", n)
+		}
+	}
+}
+
+func twoEntries() *Topology {
+	return topo(
+		Route{Name: "hypixel", Entry: "hk", Port: 25565, Transport: "udp",
+			Via: []string{"ty", "chi"}, Target: hypixel(), Whitelist: "whitelist.txt"},
+		Route{Name: "hypixel-ty", Entry: "ty", Port: 25565, Transport: "udp",
+			Via: []string{"chi"}, Target: hypixel(), Whitelist: "whitelist.txt"},
+	)
+}
+
+// A discord block lets the bot's node in to every control link, checks its way
+// to the entries it does not live on, and writes the bot a config naming them.
+func TestDiscordBlockOpensControlToTheBot(t *testing.T) {
+	top := twoEntries()
+	top.Discord = &Discord{Guild: "g", Roles: map[string]botcfg.Role{"r": {Accounts: 1}}, AuditChannel: "a"}
+	if err := top.checkDiscord(); err != nil {
+		t.Fatal(err)
+	}
+	if top.botNode() != "hk" || top.primary() != "hk" {
+		t.Fatalf("bot on %s, primary %s; want the first whitelisted entry", top.botNode(), top.primary())
+	}
+	cfgs, checks := expandOK(t, top)
+
+	for _, n := range []string{"hk", "ty"} {
+		c := cfgs[n].Control
+		if len(c.AllowFrom) != 1 || c.AllowFrom[0] != "198.51.100.10" {
+			t.Errorf("%s allows %v, want the bot's node", n, c.AllowFrom)
+		}
+	}
+	var ctl []check
+	for _, c := range checks {
+		if c.why == "control" {
+			ctl = append(ctl, c)
+		}
+	}
+	if len(ctl) != 1 || ctl[0].from != "hk" || ctl[0].to != "ty" || ctl[0].addr != "198.51.100.20:9004" || ctl[0].udp {
+		t.Errorf("control checks: %+v", ctl)
+	}
+	if rule := ufwRule(top, ctl[0]); !strings.Contains(rule, "from 198.51.100.10 to any port 9004 proto tcp") {
+		t.Errorf("rule: %s", rule)
+	}
+
+	bc := botConfig(top, cfgs)
+	if bc.Guild != "g" || bc.Primary != "hk" || bc.AuditChannel != "a" || len(bc.Entries) != 2 {
+		t.Fatalf("bot config: %+v", bc)
+	}
+	if bc.Entries[0] != (botcfg.Entry{Node: "hk", Addr: "198.51.100.10:9003", Key: cfgs["hk"].Control.Key}) ||
+		bc.Entries[1] != (botcfg.Entry{Node: "ty", Addr: "198.51.100.20:9004", Key: cfgs["ty"].Control.Key}) {
+		t.Errorf("bot entries: %+v", bc.Entries)
+	}
+}
+
+// The bot can live on a node that is no entry; then the first entry stays the
+// primary and every entry is reached over the network.
+func TestDiscordNodeElsewhere(t *testing.T) {
+	top := twoEntries()
+	top.Discord = &Discord{Node: "chi", Guild: "g", Roles: map[string]botcfg.Role{"r": {Manage: true}}}
+	if err := top.checkDiscord(); err != nil {
+		t.Fatal(err)
+	}
+	if top.botNode() != "chi" || top.primary() != "hk" {
+		t.Fatalf("bot on %s, primary %s", top.botNode(), top.primary())
+	}
+	cfgs, checks := expandOK(t, top)
+	if cfgs["hk"].Control.AllowFrom[0] != "198.51.100.30" {
+		t.Errorf("hk allows %v", cfgs["hk"].Control.AllowFrom)
+	}
+	n := 0
+	for _, c := range checks {
+		if c.why == "control" && c.from == "chi" {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("%d control checks from the bot's node, want 2", n)
+	}
+
+	// A bot node that is an entry, but not the first, becomes the primary.
+	top.Discord.Node = "ty"
+	if top.primary() != "ty" {
+		t.Errorf("primary %s, want the bot's own entry", top.primary())
+	}
+}
+
+func TestDiscordBlockIsChecked(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		top  *Topology
+		d    *Discord
+	}{
+		{"no guild", twoEntries(), &Discord{Roles: map[string]botcfg.Role{"r": {Accounts: 1}}}},
+		{"no roles", twoEntries(), &Discord{Guild: "g"}},
+		{"unknown node", twoEntries(), &Discord{Node: "mars", Guild: "g", Roles: map[string]botcfg.Role{"r": {Accounts: 1}}}},
+		{"no whitelist", topo(Route{Name: "hypixel", Entry: "hk", Port: 25565, Via: []string{"ty", "chi"}, Target: hypixel()}),
+			&Discord{Guild: "g", Roles: map[string]botcfg.Role{"r": {Accounts: 1}}}},
+	} {
+		tc.top.Discord = tc.d
+		if err := tc.top.checkDiscord(); err == nil {
+			t.Errorf("%s: accepted", tc.name)
+		}
+	}
+}
+
+// The token goes into a root-only file through the script itself; without one
+// in the environment, a file already on the node is kept.
+func TestBotInstallScriptTokenHandling(t *testing.T) {
+	with := installBotScript(true, "abc.def")
+	if !strings.Contains(with, "install -m 0600 -o root -g root /dev/stdin /etc/proxyd/bot.env <<'ENV'\nDISCORD_BOT_TOKEN=abc.def\nENV") {
+		t.Errorf("token not written root-only:\n%s", with)
+	}
+	if strings.Contains(with, "sudo") {
+		t.Error("root install still uses sudo")
+	}
+	without := installBotScript(false, "")
+	if strings.Contains(without, "DISCORD_BOT_TOKEN=") || !strings.Contains(without, "[ -f /etc/proxyd/bot.env ] ||") {
+		t.Errorf("missing token not handled:\n%s", without)
+	}
+	if !strings.Contains(without, `SUDO="sudo -n"`) {
+		t.Error("non-root install lacks sudo")
+	}
+	for _, s := range []string{with, without} {
+		if !strings.Contains(s, "EnvironmentFile=/etc/proxyd/bot.env") || !strings.Contains(s, "User=proxybot") {
+			t.Errorf("unit lacks its env file or user:\n%s", s)
 		}
 	}
 }
