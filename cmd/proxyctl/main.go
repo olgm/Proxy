@@ -191,6 +191,8 @@ func main() {
 		fail(status(t))
 	case "uninstall":
 		fail(uninstall(t))
+	case "whitelist":
+		fail(whitelistCmd(t, fs.Args()))
 	default:
 		usage()
 		os.Exit(2)
@@ -205,11 +207,14 @@ func usage() {
   status     report each node's service state, listening sockets and tunnel links
   uninstall  stop and remove the service, binary and config (leaves the account
              and the whitelist)
+  whitelist  list | add <name> [uuid] | remove <name|uuid>
+             on every entry that holds a whitelist, over ssh
 
-A route with "transport": "udp" needs one key per leg. They are minted on the
-first deploy into tunnel-keys.json beside the topology file, and reused after
-that, so redeploying does not cut the chain. Keep that file: without it the next
-deploy mints new keys and every node has to be redeployed together.
+A route with "transport": "udp" needs one key per leg, and every entry with a
+whitelist one key for its control link. They are minted on the first deploy into
+tunnel-keys.json beside the topology file, and reused after that, so redeploying
+does not cut the chain. Keep that file: without it the next deploy mints new keys
+and every node has to be redeployed together.
 `)
 }
 
@@ -312,7 +317,31 @@ func expand(t *Topology) (map[string]*proxy.Config, []check, error) {
 		}
 		checks = append(checks, cks...)
 	}
+
+	// Every entry that holds a whitelist gets a control link, on the ports after
+	// the hops. Only loopback may connect until a discord block names the bot's
+	// node; that is enough for proxyctl, which arrives over ssh.
+	seeds, err := t.whitelistSeeds()
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, name := range sortedKeys(seeds) {
+		cfgs[name].Control = &proxy.Control{
+			Bind: bindAddr(t.Nodes[name].BindAddr, next),
+			Key:  t.keys.control(name),
+		}
+		next++
+	}
 	return cfgs, checks, nil
+}
+
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // expandTCP is the original chain: one listener per hop, each dialling the next.
@@ -585,6 +614,13 @@ func printConfigs(t *Topology, cfgs map[string]*proxy.Config) {
 				guard = "peers=" + strings.Join(l.PeerAddrs(), ",")
 			}
 			fmt.Printf("    %-3s %-22s -> %-32s %-28s %s\n", l.Network(), l.Bind, l.Next(), mode, guard)
+		}
+		if c := cfgs[n].Control; c != nil {
+			guard := "allow=loopback"
+			if len(c.AllowFrom) > 0 {
+				guard += "," + strings.Join(c.AllowFrom, ",")
+			}
+			fmt.Printf("    %-3s %-22s    %-32s %-28s %s\n", "tcp", c.Bind, "", "control", guard)
 		}
 	}
 	fmt.Println()

@@ -61,6 +61,19 @@ func (k *keyring) get(route, a, b string) string {
 	return v
 }
 
+// control returns the key sealing one node's control link. The bot's node is
+// given every entry's; each entry holds only its own.
+func (k *keyring) control(node string) string {
+	id := "ctl|" + node
+	if v, ok := k.keys[id]; ok {
+		return v
+	}
+	v := tunnel.EncodeKey(tunnel.NewKey())
+	k.keys[id] = v
+	k.dirty = true
+	return v
+}
+
 func (k *keyring) save() error {
 	if !k.dirty {
 		return nil

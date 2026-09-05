@@ -18,6 +18,12 @@
   other half resolved against Mojang on the node. `proxyd ctl` is the client for an
   operator on the node, which is how proxyctl will drive it over ssh. proxyd stays
   the only writer of its file.
+- `proxyctl`: every entry with a whitelist gets a control link, on the port after
+  the hops, with a key of its own minted into `tunnel-keys.json` as `ctl|<node>`.
+  `proxyctl whitelist list | add | remove` drives every such entry over ssh
+  through `proxyd ctl`: an add or remove goes to all of them, so a player is
+  whitelisted on the chain rather than on one node, and a list shows the entries
+  side by side with the lines that are not on all of them marked.
 - `proxyd`: config-driven relay node. Handshake rewrite (Forge markers preserved,
   BungeeCord identity stripped), source-IP allowlist, `splice(2)` relay with
   per-direction half-close, legacy `0xFE` ping rejected.

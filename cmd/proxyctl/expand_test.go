@@ -325,3 +325,49 @@ func TestExpandUDPDirect(t *testing.T) {
 		t.Fatalf("chi: %+v", chi.Peers)
 	}
 }
+
+// An entry with a whitelist gets a control link on the port after the hops, with
+// a key of its own that survives re-expansion; nothing else does.
+func TestControlLinkOnWhitelistedEntries(t *testing.T) {
+	top := topo(
+		Route{Name: "hypixel", Entry: "hk", Port: 25565, Transport: "udp",
+			Via: []string{"ty", "chi"}, Target: hypixel(), Whitelist: "whitelist.txt"},
+		Route{Name: "hypixel-ty", Entry: "ty", Port: 25565, Transport: "udp",
+			Via: []string{"chi"}, Target: hypixel(), Whitelist: "whitelist.txt"},
+	)
+	cfgs, _ := expandOK(t, top)
+
+	hk, ty, chi := cfgs["hk"].Control, cfgs["ty"].Control, cfgs["chi"].Control
+	if hk == nil || ty == nil {
+		t.Fatalf("entries lack a control link: hk=%v ty=%v", hk, ty)
+	}
+	if chi != nil {
+		t.Errorf("the exit has a control link: %+v", chi)
+	}
+	// Hops took 9000 (ty), 9001 (chi), 9002 (chi again for the second route).
+	if hk.Bind != ":9003" || ty.Bind != ":9004" {
+		t.Errorf("control ports: hk=%s ty=%s", hk.Bind, ty.Bind)
+	}
+	if hk.Key == "" || hk.Key == ty.Key {
+		t.Errorf("control keys: hk=%q ty=%q", hk.Key, ty.Key)
+	}
+	if len(hk.AllowFrom) != 0 {
+		t.Errorf("without a bot only loopback may connect, got %v", hk.AllowFrom)
+	}
+
+	again, _ := expandOK(t, top)
+	if again["hk"].Control.Key != hk.Key {
+		t.Error("re-expanding minted a new control key")
+	}
+}
+
+func TestNoControlLinkWithoutWhitelist(t *testing.T) {
+	top := topo(Route{Name: "hypixel", Entry: "hk", Port: 25565,
+		Via: []string{"ty", "chi"}, Target: hypixel()})
+	cfgs, _ := expandOK(t, top)
+	for n, c := range cfgs {
+		if c.Control != nil {
+			t.Errorf("%s has a control link with no whitelist to manage", n)
+		}
+	}
+}
