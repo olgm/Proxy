@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `proxyctl`: a route may name its entry as its own exit. That is a chain of one
+  node: the ingress parses the handshake and dials the target itself, with no hop
+  to allocate a port for and no leg for a transport to choose between. It is what
+  lets the node holding the egress address also be an entry, so a player near it
+  can skip the chain entirely and still get the whitelist and the server listing.
+
 - `proxyd`: the ingress answers a server-list ping itself and never forwards one.
   Every client refreshing its multiplayer screen, and every scanner that finds
   25565 open on a public entry, was previously a status request arriving at the

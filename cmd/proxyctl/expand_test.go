@@ -275,6 +275,8 @@ func TestNormalizeRejectsImpossibleRoutes(t *testing.T) {
 		{"duplicate below one", Route{Name: "r", Transport: "udp", Via: []string{"chi"}, Duplicate: -1}},
 		{"leg without udp", Route{Name: "r", Via: []string{"ty", "chi"}, Legs: []Leg{{From: "ty", To: "chi", Duplicate: 1}}}},
 		{"leg below one", Route{Name: "r", Transport: "udp", Via: []string{"ty", "chi"}, Legs: []Leg{{From: "ty", To: "chi"}}}},
+		{"own exit over udp", Route{Name: "r", Transport: "udp", Entry: "chi", Exit: "chi"}},
+		{"another node as exit, but no path to it", Route{Name: "r", Entry: "hk", Exit: "chi"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -325,6 +327,29 @@ func TestExpandUDPDirect(t *testing.T) {
 	}
 	if len(chi.Peers) != 1 || chi.Peers[0].Duplicate != defaultDuplicate {
 		t.Fatalf("chi: %+v", chi.Peers)
+	}
+}
+
+// A node that names itself as its own exit is an ingress that dials the target:
+// one listener, no hop, and no port allocated for anyone to dial it on.
+func TestExpandNoHops(t *testing.T) {
+	top := topo(Route{Name: "r", Entry: "chi", Port: 30001, Exit: "chi", Target: hypixel()})
+	cfgs, checks := expandOK(t, top)
+	if len(cfgs) != 1 {
+		t.Fatalf("%d nodes configured, want only the entry", len(cfgs))
+	}
+	chi := only1(t, cfgs, "chi")
+	if chi.Bind != ":30001" || chi.Upstream != "mc.hypixel.net:25565" || len(chi.Hops) != 0 {
+		t.Errorf("chi: %+v", chi)
+	}
+	if chi.Minecraft == nil || chi.Minecraft.RewriteHost != "mc.hypixel.net" {
+		t.Errorf("chi is not an ingress: %+v", chi.Minecraft)
+	}
+	if len(chi.AllowFrom) != 0 {
+		t.Errorf("a public ingress must not be allowlisted: %v", chi.AllowFrom)
+	}
+	if len(checks) != 1 || checks[0].why != "entry" || checks[0].addr != "198.51.100.30:30001" {
+		t.Errorf("checks: %+v", checks)
 	}
 }
 

@@ -114,6 +114,17 @@ type Leg struct {
 
 func (l Leg) edge() [2]string { return [2]string{l.From, l.To} }
 
+// chain is the nodes a single-path route visits, in the order data travels. A
+// route whose exit is its entry visits one node: that ingress dials the target
+// itself rather than handing the stream to a hop.
+func (r Route) chain() []string {
+	c := append([]string{r.Entry}, r.Paths[0].Via...)
+	if r.Exit != r.Entry {
+		c = append(c, r.Exit)
+	}
+	return c
+}
+
 // defaultDuplicate is what an unqualified UDP route sends. Two copies of a
 // Minecraft session is a few tens of KB/s: cheap against one lost packet costing a
 // round trip, and useless against a leg that is dropping because it is full.
@@ -137,7 +148,15 @@ func (r *Route) normalize() error {
 		r.Via = nil
 	}
 	if len(r.Paths) == 0 {
-		return fmt.Errorf("route %q: needs via or paths", r.Name)
+		// A route that names itself as its own exit has no hops: the ingress
+		// dials the target. There is no leg, so there is no transport to pick.
+		if r.Exit == "" || r.Exit != r.Entry {
+			return fmt.Errorf("route %q: needs via or paths", r.Name)
+		}
+		if r.Transport == "udp" {
+			return fmt.Errorf("route %q: entry %q is its own exit, so there is no leg to tunnel; drop the transport", r.Name, r.Entry)
+		}
+		r.Paths = []Path{{Via: nil}}
 	}
 	if r.Exit == "" {
 		return fmt.Errorf("route %q: paths need an exit to converge on", r.Name)
@@ -481,7 +500,7 @@ func sortedKeys(m map[string]string) []string {
 
 // expandTCP is the original chain: one listener per hop, each dialling the next.
 func expandTCP(t *Topology, r Route, cfgs map[string]*proxy.Config, next int) (int, []check, error) {
-	chain := append(append([]string{r.Entry}, r.Paths[0].Via...), r.Exit)
+	chain := r.chain()
 	if err := distinct(t, r, chain); err != nil {
 		return next, nil, err
 	}

@@ -56,7 +56,7 @@ needs one more thing before `deploy`; see "Discord bot" below.
 | `routes[].transport` | `tcp` (default) or `udp` — see below |
 | `routes[].duplicate` | UDP only; copies of every packet on every leg. Default 2 |
 | `routes[].legs` | UDP only; `{from, to, duplicate}` per leg that should differ |
-| `routes[].exit` | node every path converges on. Implied by the end of `via` |
+| `routes[].exit` | node every path converges on. Implied by the end of `via`; naming the entry itself is a route with no hops, where that ingress dials the target |
 | `routes[].paths` | UDP only; race several ways to the exit instead of one `via` |
 | `routes[].tunnel` | UDP only; sizes, deadlines and every timer — see below |
 | `routes[].target` | final `addr`, plus `rewrite_host` / `rewrite_port` |
