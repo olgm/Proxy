@@ -21,6 +21,9 @@ Hypixel expects, then relays raw bytes: `splice(2)` on a TCP route, numbered chu
 on a UDP one. It cannot do more: the client encrypts from Encryption Response
 onward.
 
+A server-list ping is the exception: the ingress answers it itself and never opens
+the chain for one. See "Server list".
+
 ## Deploy
 
 Needs Go and ssh locally; root or passwordless sudo on each node.
@@ -28,6 +31,7 @@ Needs Go and ssh locally; root or passwordless sudo on each node.
 ```sh
 cp topology.example.json topology.json     # edit; delete the discord block to run without the bot
 cp whitelist.example.txt whitelist.txt     # edit, or drop `whitelist` from the route
+cp motd.example.json motd.json             # optional; there is a built-in listing
 go run ./cmd/proxyctl config               # preview, changes nothing
 go run ./cmd/proxyctl deploy
 go run ./cmd/proxyctl status
@@ -57,6 +61,7 @@ needs one more thing before `deploy`; see "Discord bot" below.
 | `routes[].tunnel` | UDP only; sizes, deadlines and every timer — see below |
 | `routes[].target` | final `addr`, plus `rewrite_host` / `rewrite_port` |
 | `routes[].whitelist` | optional; local `ign:uuid` file seeded onto the entry node |
+| `routes[].motd` | optional; local JSON file the entry answers server-list pings with |
 | `discord` | optional; deploys the bot — see below |
 | `discord.node` | node the bot runs on. Default: the first entry with a whitelist |
 | `discord.guild` | the server's id |
@@ -208,6 +213,45 @@ replay window behind it.
 mode 600 — and reuses them afterwards, so redeploying does not cut the chain. Keep
 that file. Without it the next deploy generates new keys, which only works if every
 node is redeployed together.
+
+## Server list
+
+The ingress answers a server-list ping itself. It never opens the chain for one and
+never forwards it, so no amount of clients refreshing their multiplayer screen —
+and no scanner that finds port 25565 open — turns into traffic at Hypixel from the
+egress address. That address is the hardest part of this system to replace, and a
+status ping is the one packet a stranger can make us send without an account.
+
+Answering locally also means the listing still works when the chain or the backend
+is down, which is when a player most wants to look at it.
+
+Two fields cannot come from the file:
+
+- `version.protocol` is echoed from the client's handshake. Reporting our own would
+  put the red "incompatible" badge on the listing for every client that is not
+  exactly that version.
+- `players.online` is the number of logins the ingress is relaying right now.
+
+Everything else is whatever `routes[].motd` points at, or a built-in listing if the
+route names none. `motd.example.json` has the shape; `favicon` is a base64 data URI
+of a 64x64 PNG.
+
+### The ping a player sees
+
+Nothing in the status exchange carries a latency: the client times the pong itself.
+Answering at once would show the distance to the ingress, which is the near end of a
+chain the player's traffic has to cross all of — a flattering number, and a useless
+one.
+
+So the ingress holds the pong for as long as the rest of the chain takes. It knows
+that figure because the entry times the whole tunnel: an echo goes down the hops,
+each node passes it along, and the node with no hops left — the exit — turns it
+around. That is our last node before the backend, so what a player reads off the
+server list is the trip to Hypixel's doorstep, and none of it is a packet Hypixel
+sees. The measurement repeats on the link ping interval and is smoothed the same way
+a leg's own round trip is.
+
+On a plain TCP route there is nothing measuring itself, so the pong goes out at once.
 
 ## Whitelist
 
@@ -458,13 +502,20 @@ per link beside the service state.
 :9000: link 203.0.113.30:9001 up rtt=123.1ms mdev=0.4ms loss=0.0% sent=812 recv=790 rtx=0 dropped=0
 ```
 
-`tools/mcping` sends a status ping and prints the MOTD. It claims a wrong hostname by
-default, so a reply proves the ingress rewrote the address rather than the client
-having asked for the right thing:
+`tools/mcping` sends a status ping and prints the MOTD:
 
 ```sh
 go run ./tools/mcping <entry-ip>:25565
 ```
+
+It answers from the ingress now, so what it proves has changed: that the entry is up,
+that the listing renders, and — from the round trip it reports — what the chain
+currently costs, since the ingress holds the pong for exactly that. It no longer says
+anything about the hostname rewrite, because nothing it sends reaches the backend. A
+real login is the only thing that exercises the rewrite.
+
+Pointing it at the entry is safe for the same reason; pointing it at the backend is
+still forbidden from anywhere, and from a node most of all.
 
 Not built or deployed by proxyctl. Copy it to a node by hand if you want it there.
 
@@ -501,4 +552,5 @@ never aim it at the backend from a node.
 - Egress IP quality matters: Hypixel blocks flagged datacenter ranges. Don't probe the
   backend from an egress node either (pings, status queries, benchmark loops); test
   from your own machine, and treat the egress IP as something you can't easily
-  replace.
+  replace. Nothing in the data path probes it either: a server-list ping stops at the
+  ingress and the chain times itself with its own echo.

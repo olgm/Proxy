@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- `proxyd`: the ingress answers a server-list ping itself and never forwards one.
+  Every client refreshing its multiplayer screen, and every scanner that finds
+  25565 open on a public entry, was previously a status request arriving at the
+  backend from the egress address — the one thing here that cannot be replaced, and
+  the one packet a stranger can make us send without an account. The listing is
+  `routes[].motd`, a JSON document, or a built-in one carrying the v1 branding.
+  `version.protocol` is echoed from the client's handshake, without which the client
+  shows an incompatible badge, and `players.online` is the live count of relayed
+  logins. The listing now also survives the backend being down.
+- `proxyd`: the ping a player reads off the server list covers the chain, not just
+  the entry. Nothing in the status exchange carries a latency — the client times the
+  pong — so the ingress holds its answer for as long as the rest of the chain takes.
+  The entry learns that from a new tunnel message that walks the hops and is turned
+  around by the node with none left, which is our last one before the backend: a
+  measurement to Hypixel's doorstep that Hypixel never sees. Capped at 2 s so a dead
+  chain looks bad rather than hangs; zero on a TCP route, which measures nothing.
 - `internal/tunnel`: an ECHO message that times the whole chain instead of one leg
   of it. A node passes it along while it has hops, and the node with none left —
   the exit — turns it around, so it measures as far as our own infrastructure goes
@@ -22,6 +38,8 @@
   read out of the middle of some other field as a UUID. Snapshot clients report
   `0x40000000|n`, which is past every version threshold, so a snapshot of anything
   before 1.20.2 was parsed on the newest layout and denied for a UUID it never sent.
+- `proxyctl`: `routes[].motd` uploads a listing to the entry, replaced on every
+  deploy — unlike the whitelist, nothing on the node writes it.
 - `proxyd`: a whitelist line may end in `# tag`, kept through renames, and the list
   can be added to and removed from in place, reloading first so an edit made on the
   node between two operations survives. The tag is how the Discord bot will know

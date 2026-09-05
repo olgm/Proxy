@@ -217,18 +217,24 @@ func TestWhitelistDeniesUnlistedOldClient(t *testing.T) {
 	}
 }
 
-// Status pings carry no identity to check. Gating them would only hide the MOTD
-// from the people who are on the list.
-func TestWhitelistLetsStatusPingThrough(t *testing.T) {
+// A status ping is answered here and never forwarded, whitelist or no whitelist.
+// Every client refreshing its server list, and every scanner that finds 25565 open,
+// would otherwise become a status request arriving at the backend from the egress
+// address. See agents/operational-safety.md.
+func TestStatusPingNeverReachesTheBackend(t *testing.T) {
 	backend, got := fakeBackend(t)
 	ingress := whitelistIngress(t, backend, whitelistFile(t, "Notch:"+notchUUID+"\n"))
 
-	dialIngress(t, ingress, 764, mc.IntentStatus, []byte{0x01, 0x00, 0, 0, 0, 0, 0, 0})
+	c := dialIngress(t, ingress, 764, mc.IntentStatus, []byte{0x01, 0x00})
+	doc := readStatusResponse(t, c)
 
 	select {
 	case <-got:
-	case <-time.After(5 * time.Second):
-		t.Fatal("status ping was blocked by the whitelist")
+		t.Fatal("a status ping opened a connection to the backend")
+	case <-time.After(500 * time.Millisecond):
+	}
+	if doc["description"] == nil || doc["favicon"] == nil {
+		t.Fatalf("ingress answered without the branding: %v", doc)
 	}
 }
 

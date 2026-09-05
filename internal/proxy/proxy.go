@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/olgm/proxy/internal/control"
@@ -30,6 +31,11 @@ const (
 	// Hypixel's ~15s keepalives.
 	handshakeTimeout = 10 * time.Second
 	dialTimeout      = 10 * time.Second
+
+	// maxChainDelay caps how long the ingress will hold a pong to report the
+	// chain's latency. A chain that has stopped answering leaves a stale figure
+	// behind; past this the server list should look bad, not hang.
+	maxChainDelay = 2 * time.Second
 
 	// denyMessage is what a non-whitelisted player sees. Dropping the connection
 	// instead would be indistinguishable from the chain being down.
@@ -143,6 +149,10 @@ type Minecraft struct {
 	// Whitelist is the path to an ign:uuid list. Empty means anyone may log in.
 	// Only an ingress can hold one: it is the only hop that sees a Login Start.
 	Whitelist string `json:"whitelist,omitempty"`
+	// Motd is the path to the JSON document this ingress answers a server-list
+	// ping with. Empty uses the built-in one. There is no setting for forwarding
+	// the backend's own: see serveStatus.
+	Motd string `json:"motd,omitempty"`
 }
 
 type server struct {
@@ -151,6 +161,10 @@ type server struct {
 	wl     *whitelist.List
 	mojang mojangAPI // set with wl; the control link resolves names through it
 	tun    *tunnel.Node
+	motd   *mc.Motd
+	// online is the count of logins currently being relayed, which is the number
+	// the MOTD reports and the only live state this node keeps about a session.
+	online atomic.Int64
 }
 
 // halfCloser is whatever the next leg turns out to be: a TCP connection on a
@@ -410,6 +424,15 @@ func newServer(l Listener) (*server, error) {
 		}
 		s.wl, s.mojang = wl, m
 	}
+	if l.Minecraft != nil {
+		// Loaded whether or not it is configured: an ingress always answers a
+		// status ping itself, so it always needs something to answer with.
+		m, err := mc.LoadMotd(l.Minecraft.Motd)
+		if err != nil {
+			return nil, fmt.Errorf("listener %s: %w", l.Bind, err)
+		}
+		s.motd = m
+	}
 	if len(l.Hops) > 0 || len(l.Peers) > 0 {
 		t, err := newTunnel(l)
 		if err != nil {
@@ -524,21 +547,78 @@ func (s *server) handleMinecraft(c *net.TCPConn) {
 		log.Printf("%s: handshake from %s: %v", s.Bind, c.RemoteAddr(), err)
 		return
 	}
+	if h.Intent == mc.IntentStatus {
+		s.serveStatus(c, br, h)
+		return
+	}
+	s.serveLogin(c, br, h)
+}
+
+// serveStatus answers a server-list ping from this node and never dials.
+//
+// Forwarding one would put a status request at the backend for every refresh of
+// every client's multiplayer screen, and for every scanner that finds 25565 open
+// on a public ingress — all of it arriving from the egress address, which is the
+// hardest thing in this system to replace. agents/operational-safety.md forbids
+// probing the backend from a node; this is the path that would otherwise do it
+// thousands of times a day without anyone running a command.
+func (s *server) serveStatus(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake) {
+	for {
+		c.SetReadDeadline(time.Now().Add(handshakeTimeout))
+		p, err := mc.ReadStatusPacket(br)
+		if err != nil {
+			return
+		}
+		switch p.ID {
+		case mc.PacketStatusRequest:
+			doc := s.motd.Render(h.ProtocolVersion, int(s.online.Load()))
+			if _, err := c.Write(mc.EncodeStatusResponse(doc)); err != nil {
+				return
+			}
+		case mc.PacketPing:
+			// Nothing in the status exchange reports a latency: the client times
+			// the pong itself. Answering at once would show the distance to this
+			// node, which is the near end of a chain the player's traffic has to
+			// cross all of — so hold the answer for as long as the rest of the
+			// chain takes, and the number lands where a player can act on it.
+			if d := s.chainDelay(); d > 0 {
+				time.Sleep(d)
+			}
+			c.Write(mc.EncodePong(p.Body))
+			return
+		default:
+			return
+		}
+	}
+}
+
+// chainDelay is how much longer than this node the whole chain takes to answer.
+// Zero on a plain TCP chain, which has nothing measuring itself, and zero until
+// the first echo comes back. Capped so a chain that has gone away leaves a player
+// waiting on the server list rather than waiting on us.
+func (s *server) chainDelay() time.Duration {
+	if s.tun == nil {
+		return 0
+	}
+	return min(s.tun.ChainRTT(), maxChainDelay)
+}
+
+func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake) {
+	ip := sourceIP(c.RemoteAddr())
 
 	// The whitelist check has to happen before we dial, so a stranger costs the
-	// chain nothing and never reaches Hypixel from our egress IP. Status pings
-	// carry no identity and are left alone: gating them would hide the MOTD from
-	// whitelisted players without keeping anyone out.
+	// chain nothing and never reaches the backend from our egress IP.
 	var login []byte
-	if s.wl != nil && h.Intent != mc.IntentStatus {
+	var name, uuid string
+	if s.wl != nil {
 		ls, raw, err := mc.ReadLoginStart(br, h.ProtocolVersion)
 		if err != nil {
 			log.Printf("%s: login start from %s: %v", s.Bind, c.RemoteAddr(), err)
 			return
 		}
-		if !s.wl.Check(ls.Name, ls.UUIDString(), sourceIP(c.RemoteAddr())) {
-			log.Printf("%s: deny %s name=%q uuid=%q proto=%d",
-				s.Bind, c.RemoteAddr(), ls.Name, ls.UUIDString(), h.ProtocolVersion)
+		name, uuid = ls.Name, ls.UUIDString()
+		if !s.wl.Check(name, uuid, ip) {
+			log.Printf("%s: deny %s name=%q uuid=%q proto=%d", s.Bind, ip, name, uuid, h.ProtocolVersion)
 			c.Write(mc.EncodeLoginDisconnect(denyMessage))
 			return
 		}
@@ -568,15 +648,18 @@ func (s *server) handleMinecraft(c *net.TCPConn) {
 			return
 		}
 	}
-	// The client may have pipelined Login Start (or a status request) behind the
-	// handshake; bufio has already pulled those bytes off the socket, so hand them
-	// over before dropping to raw relay.
+	// The client may have pipelined Login Start behind the handshake; bufio has
+	// already pulled those bytes off the socket, so hand them over before dropping
+	// to raw relay.
 	if n := br.Buffered(); n > 0 {
 		b, _ := br.Peek(n)
 		if _, err := u.Write(b); err != nil {
 			return
 		}
 	}
+
+	s.online.Add(1)
+	defer s.online.Add(-1)
 	relay(c, u)
 }
 

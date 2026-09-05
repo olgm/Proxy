@@ -90,6 +90,10 @@ type Route struct {
 	// it is deployed. The node owns it from then on — proxyd rewrites IGNs there
 	// when players rename — so later deploys leave it alone.
 	Whitelist string `json:"whitelist,omitempty"`
+	// Motd is a local JSON file the entry answers server-list pings with. Unlike
+	// the whitelist nothing on the node ever writes it, so every deploy replaces
+	// it. Empty leaves the entry on proxyd's built-in listing.
+	Motd string `json:"motd,omitempty"`
 }
 
 // Path is one way from the entry to the exit. Via lists only what is in between:
@@ -172,6 +176,9 @@ func (r *Route) normalize() error {
 const (
 	whitelistDir  = "/var/lib/proxyd"
 	whitelistPath = whitelistDir + "/whitelist.txt"
+	// motdPath sits with the config rather than the whitelist: it is operator
+	// owned and proxyd only ever reads it.
+	motdPath = "/etc/proxyd/motd.json"
 )
 
 type Target struct {
@@ -350,6 +357,23 @@ func (t *Topology) checkDiscord() error {
 }
 
 // whitelistSeeds maps each entry node to the local list file seeded onto it.
+// motdFiles is the listing document each entry answers with, by node. Like a
+// whitelist it belongs to one entry, so two routes entering the same node may not
+// disagree about it.
+func (t *Topology) motdFiles() (map[string]string, error) {
+	out := map[string]string{}
+	for _, r := range t.Routes {
+		if r.Motd == "" {
+			continue
+		}
+		if old, ok := out[r.Entry]; ok && old != r.Motd {
+			return nil, fmt.Errorf("node %q is the entry for routes with different motds (%s, %s)", r.Entry, old, r.Motd)
+		}
+		out[r.Entry] = r.Motd
+	}
+	return out, nil
+}
+
 func (t *Topology) whitelistSeeds() (map[string]string, error) {
 	seeds := map[string]string{}
 	for _, r := range t.Routes {
@@ -675,6 +699,9 @@ func distinct(t *Topology, r Route, seq []string) error {
 
 func minecraft(r Route) *proxy.Minecraft {
 	m := &proxy.Minecraft{RewriteHost: r.Target.RewriteHost, RewritePort: r.Target.RewritePort}
+	if r.Motd != "" {
+		m.Motd = motdPath
+	}
 	if r.Whitelist != "" {
 		m.Whitelist = whitelistPath
 	}
@@ -758,6 +785,10 @@ func deploy(t *Topology, cfgs map[string]*proxy.Config, checks []check, repo str
 	if err != nil {
 		return err
 	}
+	motds, err := t.motdFiles()
+	if err != nil {
+		return err
+	}
 	// Before anything is uploaded: a config carrying a key we then failed to
 	// record would leave that node unable to talk to the next deploy.
 	if err := t.keys.save(); err != nil {
@@ -806,7 +837,13 @@ func deploy(t *Topology, cfgs map[string]*proxy.Config, checks []check, repo str
 				return fmt.Errorf("%s: upload whitelist: %w", name, err)
 			}
 		}
-		out, err := ssh(node.SSH, installScript(t.User, root, seed != ""))
+		motd := motds[name]
+		if motd != "" {
+			if err := scp(node.SSH, motd, "/tmp/proxyd.motd.json"); err != nil {
+				return fmt.Errorf("%s: upload motd: %w", name, err)
+			}
+		}
+		out, err := ssh(node.SSH, installScript(t.User, root, seed != "", motd != ""))
 		if err != nil {
 			return fmt.Errorf("%s: install: %w\n%s", name, err, out)
 		}
@@ -916,7 +953,7 @@ func lastLines(b []byte, n int) string {
 
 // installScript is intentionally idempotent: deploy is the only verb, and running
 // it twice must be safe.
-func installScript(user string, root, whitelist bool) string {
+func installScript(user string, root, whitelist, motd bool) string {
 	sudo := "sudo -n"
 	if root {
 		sudo = ""
@@ -929,6 +966,13 @@ func installScript(user string, root, whitelist bool) string {
 		seed = `[ -f ` + whitelistPath + ` ] || \
   $SUDO install -m 0640 -o "$USER" -g "$USER" /tmp/proxyd.whitelist.txt ` + whitelistPath + `
 rm -f /tmp/proxyd.whitelist.txt`
+	}
+	// The listing, unlike the list, has no writer on the node, so this one is
+	// replaced every time rather than seeded once.
+	if motd {
+		seed += `
+$SUDO install -m 0640 -o root -g "$USER" /tmp/proxyd.motd.json ` + motdPath + `
+rm -f /tmp/proxyd.motd.json`
 	}
 	return fmt.Sprintf(`set -eu
 SUDO="%s"
