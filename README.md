@@ -534,6 +534,28 @@ Point it at a mesh address to time a tunnel or a public address to time the raw 
 the destination picks the route, `-4` / `-6` pins the family. Same caveat as `mcping`:
 never aim it at the backend from a node.
 
+## Logs
+
+A node logs one line when a session opens and one when it closes:
+
+```
+:25565: login 203.0.113.9 name="Notch" uuid="069a79f4-…" proto=47 online=3
+:25565: logout 203.0.113.9 name="Notch" uuid="069a79f4-…" for 42m18s up=4.1MB down=51.7MB wire=111.6MB(x2.00) online=2
+```
+
+`up` and `down` are payload: what the session carried. `wire` is what carrying it
+cost on the tunnel's legs, counting every duplicate and every re-send, with the
+multiple over payload beside it. That figure is the only way to see what a
+`duplicate` setting is actually buying, and it is absent on a TCP route, which has
+no copies to count.
+
+`name` and `uuid` come from Login Start, so they are the client's own word — see
+"What it does not do". A route with no whitelist does not read that packet at all
+and logs both empty.
+
+Denials, rejected handshakes and whitelist renames each log a line of their own.
+`journalctl -u proxyd -f` on the node, or `proxyctl status` for the last of them.
+
 ## Notes
 
 - TCP relays enforce a source-IP allowlist in-binary. Without it a relay is an open

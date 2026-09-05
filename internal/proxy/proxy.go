@@ -617,6 +617,10 @@ func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake) {
 			return
 		}
 		name, uuid = ls.Name, ls.UUIDString()
+		if ls.Trailing {
+			log.Printf("%s: %s claims protocol %d but did not send that packet; matching on name alone",
+				s.Bind, ip, h.ProtocolVersion)
+		}
 		if !s.wl.Check(name, uuid, ip) {
 			log.Printf("%s: deny %s name=%q uuid=%q proto=%d", s.Bind, ip, name, uuid, h.ProtocolVersion)
 			c.Write(mc.EncodeLoginDisconnect(denyMessage))
@@ -658,9 +662,45 @@ func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake) {
 		}
 	}
 
-	s.online.Add(1)
-	defer s.online.Add(-1)
-	relay(c, u)
+	start := time.Now()
+	online := s.online.Add(1)
+	log.Printf("%s: login %s name=%q uuid=%q proto=%d online=%d", s.Bind, ip, name, uuid, h.ProtocolVersion, online)
+
+	up, down := relay(c, u)
+
+	log.Printf("%s: logout %s name=%q uuid=%q for %s up=%s down=%s%s online=%d",
+		s.Bind, ip, name, uuid, time.Since(start).Round(time.Second),
+		size(up), size(down), wireCost(u, up+down), s.online.Add(-1))
+}
+
+// wireCost reports what the tunnel actually spent carrying a session, and how much
+// more that was than the session itself. Duplication is set per leg, so the payload
+// figure alone never shows what a chain costs to run — this is the number that says
+// whether a duplicate count is worth what it is buying.
+func wireCost(u halfCloser, payload int64) string {
+	st, ok := u.(*tunnel.Stream)
+	if !ok {
+		return ""
+	}
+	wire := st.Wire()
+	if wire == 0 || payload <= 0 {
+		return fmt.Sprintf(" wire=%s", size(int64(wire)))
+	}
+	return fmt.Sprintf(" wire=%s(x%.2f)", size(int64(wire)), float64(wire)/float64(payload))
+}
+
+// size renders a byte count the way an operator reads one.
+func size(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%dB", n)
+	}
+	v, exp := float64(n)/unit, 0
+	for v >= unit && exp < 3 {
+		v /= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f%cB", v, "KMGT"[exp])
 }
 
 // serveTunnel is the exit's accept loop. A relay never reaches the body: it has
@@ -743,16 +783,19 @@ func (s *server) allowed(a net.Addr) bool {
 // payload never enters userspace: io.Copy looks at the concrete type, which the
 // interface does not hide from it. A tunnel stream on one side gives that up,
 // because the bytes have to be numbered before they can be sent.
-func relay(a, b halfCloser) {
+// The byte counts it returns are payload: what the session carried, before the
+// tunnel duplicated any of it.
+func relay(a, b halfCloser) (aToB, bToA int64) {
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go pipe(a, b, &wg)
-	go pipe(b, a, &wg)
+	go pipe(b, a, &aToB, &wg)
+	go pipe(a, b, &bToA, &wg)
 	wg.Wait()
+	return aToB, bToA
 }
 
-func pipe(dst, src halfCloser, wg *sync.WaitGroup) {
+func pipe(dst, src halfCloser, n *int64, wg *sync.WaitGroup) {
 	defer wg.Done()
-	io.Copy(dst, src)
+	*n, _ = io.Copy(dst, src)
 	dst.CloseWrite()
 }

@@ -26,6 +26,11 @@
   connection to Hypixel per measurement. Only the entry originates one, on the link
   ping interval; the first reply for a nonce wins and `Node.ChainRTT` smooths it the
   way a leg smooths its own round trip.
+- `proxyd`: a session logs one line when it opens and one when it closes, with the
+  source address, the name and uuid claimed at login, how long it lasted, and the
+  payload each way. Over a tunnel it also logs what the legs actually spent carrying
+  it, duplicates and re-sends included, and the multiple that is over payload — the
+  only view of what a `duplicate` setting is buying.
 - `internal/tunnel`: a stream counts what it has actually put on the legs — every
   copy a leg's `duplicate` asks for, and every re-send — so what a session cost can
   be reported beside what it carried. `Stream.Wire`.
