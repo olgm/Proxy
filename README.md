@@ -6,8 +6,10 @@ packet is replaced by the node before it rather than by the far end.
 Legs run over plain TCP or over a UDP tunnel, per route. The tunnel can send every
 packet more than once, and down more than one path at a time.
 
-Targets Hypixel. Deployed today as HK ingress → Tokyo relay → Chicago egress, over
-UDP with every packet doubled.
+Targets Hypixel. Deployed today on four nodes — Hong Kong, Tokyo, Sydney and
+Chicago — every one of them an ingress, all four converging on the Chicago exit.
+HK goes through Tokyo; Tokyo and Sydney go straight to Chicago; Chicago dials the
+backend itself. Every hop leg is UDP with every packet doubled.
 
 ## Design
 
