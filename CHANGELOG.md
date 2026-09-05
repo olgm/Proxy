@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+- `probed`: a measurement service that answers the question `duplicate` exists for.
+  Every leg a production path really uses is probed twice — once at a single copy
+  and once at the count that leg carries — and the difference between the two is
+  what duplication buys, on that leg, in the same window. Every route longer than
+  one leg is probed the same way end to end, where the copies are also raced across
+  every path into the exit. What is measured follows from the routes and is not
+  configurable: a pair of nodes no route puts traffic between is never probed, so
+  Sydney never polls Hong Kong. It is a separate binary, unit, user and set of
+  keys, deployed by a `probe` block in `topology.json` and absent without one, so
+  it can be stopped without touching a live session and holding its keys is not a
+  way into one. Nothing it sends reaches the backend: a chain probe is turned
+  around at the exit exactly as the tunnel's ECHO is.
+- `internal/probe`: the probe protocol. The tunnel's framing byte for byte, sealed
+  under a key of the leg's own, because a probe of a different size or shape
+  measures a different path. Every node drops what it receives to one copy and
+  sends on with its own leg's count, so the counts never compound along a chain,
+  and the count is the hop's rather than the class's — two paths into one exit may
+  carry different numbers and a node racing both honours each.
+- `internal/probe`: round-trip loss is split into the direction that dropped it,
+  without sending anything extra. An answer carries the responder's own count of
+  distinct probes it has accepted, and differencing that across a window says how
+  many arrived; the rest of the loss was on the way back. The first window of a
+  series reports null rather than zero, because that count is the difference of two
+  counters and the earlier one comes from the window before.
+- `internal/probe`: the dataset is JSONL at `/var/lib/probed/probe.jsonl`, one
+  object per class per window, at every configured window length — a short one to
+  watch an incident happen and a long one whose p99 has enough samples behind it to
+  mean anything. A sample is filed under the time it was sent rather than the time
+  it came back, and a window is flushed one probe timeout after it closes, so a
+  probe still in flight at the boundary is counted where it was sent instead of
+  written off. `n` is in every line, because p99 of a sixty-sample window is the
+  second-worst of sixty. The file rotates at `max_log_mb` keeping one previous
+  file, so it is bounded however long a node runs.
+- `proxyctl`: `deploy` installs `probed` after every `proxyd`, mints a key per
+  probe leg into `tunnel-keys.json`, allocates its ports after the hops and the
+  control links, and verifies each one the way it verifies a hop. `config` prints
+  the class map, `status` the newest line per class, `uninstall` removes the
+  service and leaves the dataset.
+- `internal/tunnel`: the link sealer is exported, so probed can put the tunnel's
+  own framing on the wire rather than an approximation of it. No behaviour change.
+
 - `proxyctl`: a route may name its entry as its own exit. That is a chain of one
   node: the ingress parses the handshake and dials the target itself, with no hop
   to allocate a port for and no leg for a transport to choose between. It is what
