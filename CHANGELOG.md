@@ -24,6 +24,19 @@
   through `proxyd ctl`: an add or remove goes to all of them, so a player is
   whitelisted on the chain rather than on one node, and a list shows the entries
   side by side with the lines that are not on all of them marked.
+- `proxybot`: the Discord bot. Runs on one node, reaches every whitelisted entry
+  over its control link, and keeps them carrying one membership: an op goes to
+  the primary first and stops if refused, then to the others, and every five
+  minutes the others are brought level with the primary by uuid and tag. Guild
+  slash commands, private replies: `/whitelist add`, `remove`, `list`, and for
+  managers `purge`, adding on a member's behalf and seeing everyone's lines. What
+  a role grants comes from the topology: an account cap, or manage. A member's
+  lines carry their Discord id as the tag, which is the whole ownership model, and
+  are dropped once they leave the server or hold no configured role any more,
+  checked with one Get Guild Member call each per pass so no privileged intent is
+  needed. Every change is logged, and posted to an audit channel when one is set.
+  The bot holds no state of its own. It depends on `github.com/bwmarrin/discordgo`;
+  proxyd's import graph stays stdlib.
 - `proxyd`: config-driven relay node. Handshake rewrite (Forge markers preserved,
   BungeeCord identity stripped), source-IP allowlist, `splice(2)` relay with
   per-direction half-close, legacy `0xFE` ping rejected.
