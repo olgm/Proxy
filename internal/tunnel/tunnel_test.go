@@ -606,3 +606,52 @@ func TestOnlyTheExitAnswersAnEcho(t *testing.T) {
 		t.Errorf("the exit measured a chain rtt of %v; it has no chain ahead of it", exit.ChainRTT())
 	}
 }
+
+// What a session costs is not what it carried: every leg puts each chunk on the
+// wire as many times as it is set to, and asks again for what went missing. The
+// ingress logs this beside the payload, so it has to count the copies rather than
+// the chunks.
+func TestWireCountsEveryCopy(t *testing.T) {
+	const body = 64 * 1024
+	for _, dup := range []int{1, 2, 3} {
+		entry, exit := chain(t, dup, 0, nil, nil)
+		s, err := entry.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			s.Write(payload(body))
+			s.CloseWrite()
+		}()
+		es, err := exit.Accept()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.ReadAll(es); err != nil {
+			t.Fatal(err)
+		}
+
+		wire := float64(s.Wire())
+		ratio := wire / body
+		// Framing and the AEAD tag put it a little over the multiple, and a lost
+		// datagram would put it further over. Under it would mean copies going
+		// uncounted, which is the number the log exists to show.
+		if ratio < float64(dup) || ratio > float64(dup)*1.2 {
+			t.Errorf("dup %d: wire %.0f for %d payload is x%.2f, want about x%d",
+				dup, wire, body, ratio, dup)
+		}
+	}
+}
+
+// A stream that carried nothing costs nothing, so a log line for one is not
+// reporting a duplication multiple of infinity.
+func TestWireIsZeroBeforeAnythingIsSent(t *testing.T) {
+	entry, _ := chain(t, 2, 0, nil, nil)
+	s, err := entry.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Wire(); got != 0 {
+		t.Errorf("unused stream already cost %d bytes", got)
+	}
+}

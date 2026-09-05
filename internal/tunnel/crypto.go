@@ -83,6 +83,10 @@ func newSealer(key []byte) (*sealer, error) {
 // short could not promise over a long-lived link.
 const nonceLen = 4 + 8
 
+// gcmOverhead is the authentication tag every sealed datagram carries. Needed to
+// size a buffer, and to say what a chunk cost once it was on the wire.
+const gcmOverhead = 16
+
 // seal produces one datagram. Every copy of a duplicated chunk is sealed
 // separately: identical bytes on the wire would be indistinguishable from a replay
 // and the receiver would drop the second copy, defeating the point.

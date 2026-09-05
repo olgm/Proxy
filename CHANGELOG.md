@@ -10,6 +10,9 @@
   connection to Hypixel per measurement. Only the entry originates one, on the link
   ping interval; the first reply for a nonce wins and `Node.ChainRTT` smooths it the
   way a leg smooths its own round trip.
+- `internal/tunnel`: a stream counts what it has actually put on the legs — every
+  copy a leg's `duplicate` asks for, and every re-send — so what a session cost can
+  be reported beside what it carried. `Stream.Wire`.
 - `proxyd`: a handshake naming a next state other than status, login or transfer is
   rejected instead of parsed. Encode re-emits whatever was read, so an unknown one
   was forwarded to the backend verbatim: eight bytes from anyone at all, turned into

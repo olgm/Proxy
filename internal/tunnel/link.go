@@ -100,7 +100,7 @@ func (l *Link) send(plain []byte, n int, rtx bool) {
 		return // a peer that has never spoken has no address to answer at
 	}
 	for i := 0; i < n; i++ {
-		buf := l.seal.seal(make([]byte, 0, nonceLen+len(plain)+16), plain)
+		buf := l.seal.seal(make([]byte, 0, nonceLen+len(plain)+gcmOverhead), plain)
 		if _, err := l.sock.conn.WriteToUDP(buf, to); err != nil {
 			l.count(func(s *linkStats) { s.dropped++ })
 			return

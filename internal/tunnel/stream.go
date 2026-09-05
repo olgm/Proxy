@@ -7,6 +7,7 @@ import (
 	"log"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -162,8 +163,10 @@ func (d *dir) finish() error {
 // arrived twice from a lossy leg leaves once onto a clean one.
 func (d *dir) transmit(c *chunk, rtx bool) {
 	plain := encode(d.s.id, c, rtx)
+	sealed := nonceLen + len(plain) + gcmOverhead
 	for _, l := range d.send {
 		l.send(plain, l.dup, rtx)
+		d.s.wire.Add(uint64(l.dup * sealed))
 	}
 	d.mu.Lock()
 	d.lastSent = time.Now()
@@ -509,10 +512,20 @@ type Stream struct {
 	// rx and tx are the terminal view of those two. Nil at a relay.
 	rx, tx *dir
 
+	// wire is every byte this node has put on a socket for this stream: each
+	// chunk once per copy the leg is set to send, plus each re-send. Payload says
+	// what the session carried; this says what carrying it cost, which is the only
+	// way to see what a duplicate count is actually buying.
+	wire atomic.Uint64
+
 	mu       sync.Mutex
 	lastSeen time.Time
 	expires  time.Time // once closed, state lingers to answer late NACKs
 }
+
+// Wire reports what this stream has cost on the tunnel's legs, duplicates and
+// re-sends included. The ingress logs it beside the payload at logout.
+func (s *Stream) Wire() uint64 { return s.wire.Load() }
 
 func (s *Stream) Read(p []byte) (int, error) {
 	if s.rx == nil {
