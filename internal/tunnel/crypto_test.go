@@ -7,10 +7,10 @@ import (
 
 func TestSealOpenRoundTrip(t *testing.T) {
 	k := NewKey()
-	a, _ := newSealer(k)
-	b, _ := newSealer(k)
+	a, _ := NewSealer(k)
+	b, _ := NewSealer(k)
 	msg := []byte("the quick brown fox")
-	got, err := b.open(nil, a.seal(nil, msg))
+	got, err := b.Open(nil, a.Seal(nil, msg))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -20,22 +20,22 @@ func TestSealOpenRoundTrip(t *testing.T) {
 }
 
 func TestWrongKeyIsRejected(t *testing.T) {
-	a, _ := newSealer(NewKey())
-	b, _ := newSealer(NewKey())
-	if _, err := b.open(nil, a.seal(nil, []byte("x"))); err == nil {
+	a, _ := NewSealer(NewKey())
+	b, _ := NewSealer(NewKey())
+	if _, err := b.Open(nil, a.Seal(nil, []byte("x"))); err == nil {
 		t.Fatal("opened a datagram sealed with another key")
 	}
 }
 
 func TestTamperIsRejected(t *testing.T) {
 	k := NewKey()
-	a, _ := newSealer(k)
-	b, _ := newSealer(k)
-	wire := a.seal(nil, []byte("payload"))
+	a, _ := NewSealer(k)
+	b, _ := NewSealer(k)
+	wire := a.Seal(nil, []byte("payload"))
 	for i := range wire {
 		bad := bytes.Clone(wire)
 		bad[i] ^= 0x01
-		if _, err := b.open(nil, bad); err == nil {
+		if _, err := b.Open(nil, bad); err == nil {
 			t.Fatalf("opened a datagram with byte %d flipped", i)
 		}
 	}
@@ -45,15 +45,15 @@ func TestTamperIsRejected(t *testing.T) {
 // receiver's replay window would eat the second and duplication would be a no-op.
 func TestCopiesDifferOnTheWire(t *testing.T) {
 	k := NewKey()
-	a, _ := newSealer(k)
-	b, _ := newSealer(k)
+	a, _ := NewSealer(k)
+	b, _ := NewSealer(k)
 	msg := []byte("duplicated")
-	one, two := a.seal(nil, msg), a.seal(nil, msg)
+	one, two := a.Seal(nil, msg), a.Seal(nil, msg)
 	if bytes.Equal(one, two) {
 		t.Fatal("two seals of one payload produced identical datagrams")
 	}
 	for _, w := range [][]byte{one, two} {
-		if got, err := b.open(nil, w); err != nil || !bytes.Equal(got, msg) {
+		if got, err := b.Open(nil, w); err != nil || !bytes.Equal(got, msg) {
 			t.Fatalf("open: %v %q", err, got)
 		}
 	}
@@ -61,14 +61,14 @@ func TestCopiesDifferOnTheWire(t *testing.T) {
 
 func TestReplayIsRejected(t *testing.T) {
 	k := NewKey()
-	a, _ := newSealer(k)
-	b, _ := newSealer(k)
-	wire := a.seal(nil, []byte("open me twice"))
-	if _, err := b.open(nil, wire); err != nil {
+	a, _ := NewSealer(k)
+	b, _ := NewSealer(k)
+	wire := a.Seal(nil, []byte("open me twice"))
+	if _, err := b.Open(nil, wire); err != nil {
 		t.Fatalf("first open: %v", err)
 	}
-	if _, err := b.open(nil, wire); err != errReplay {
-		t.Fatalf("second open: got %v want %v", err, errReplay)
+	if _, err := b.Open(nil, wire); err != ErrReplay {
+		t.Fatalf("second open: got %v want %v", err, ErrReplay)
 	}
 }
 
@@ -76,14 +76,14 @@ func TestReplayIsRejected(t *testing.T) {
 // treating an out-of-order arrival as a replay.
 func TestReorderWithinWindowIsAccepted(t *testing.T) {
 	k := NewKey()
-	a, _ := newSealer(k)
-	b, _ := newSealer(k)
+	a, _ := NewSealer(k)
+	b, _ := NewSealer(k)
 	var wires [][]byte
 	for i := 0; i < 200; i++ {
-		wires = append(wires, a.seal(nil, []byte{byte(i)}))
+		wires = append(wires, a.Seal(nil, []byte{byte(i)}))
 	}
 	for i := len(wires) - 1; i >= 0; i-- { // deliver backwards
-		if _, err := b.open(nil, wires[i]); err != nil {
+		if _, err := b.Open(nil, wires[i]); err != nil {
 			t.Fatalf("datagram %d rejected: %v", i, err)
 		}
 	}

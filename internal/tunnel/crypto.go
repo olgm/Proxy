@@ -16,7 +16,7 @@ import (
 const KeyLen = 32
 
 var (
-	errReplay  = errors.New("tunnel: replayed datagram")
+	ErrReplay  = errors.New("tunnel: replayed datagram")
 	errBadKey  = errors.New("tunnel: key must be 32 bytes")
 	errTooShrt = errors.New("tunnel: datagram shorter than its own framing")
 )
@@ -44,13 +44,13 @@ func DecodeKey(s string) ([]byte, error) {
 	return k, nil
 }
 
-// sealer authenticates one link. Both ends hold the same key, and without it a
+// Sealer authenticates one link. Both ends hold the same key, and without it a
 // datagram is not merely unreadable but unforgeable — which is the whole reason
 // this exists. Over TCP a source-address allowlist was enough, because an address
 // has to complete a handshake before it can use one. Over UDP it is not: anyone
 // who can spoof the previous hop's address could otherwise inject bytes into a
 // live session, or make a relay reflect traffic on their behalf.
-type sealer struct {
+type Sealer struct {
 	aead  cipher.AEAD
 	epoch uint32 // ours, random per process, so counters never repeat across restarts
 	ctr   atomic.Uint64
@@ -59,7 +59,7 @@ type sealer struct {
 	seen replay
 }
 
-func newSealer(key []byte) (*sealer, error) {
+func NewSealer(key []byte) (*Sealer, error) {
 	if len(key) != KeyLen {
 		return nil, errBadKey
 	}
@@ -75,35 +75,35 @@ func newSealer(key []byte) (*sealer, error) {
 	if _, err := rand.Read(e[:]); err != nil {
 		return nil, err
 	}
-	return &sealer{aead: aead, epoch: binary.BigEndian.Uint32(e[:])}, nil
+	return &Sealer{aead: aead, epoch: binary.BigEndian.Uint32(e[:])}, nil
 }
 
-// nonceLen is epoch + counter. Counters are never reused under one epoch, so the
+// NonceLen is epoch + counter. Counters are never reused under one epoch, so the
 // nonce is unique by construction rather than by luck, which a random nonce this
 // short could not promise over a long-lived link.
-const nonceLen = 4 + 8
+const NonceLen = 4 + 8
 
-// gcmOverhead is the authentication tag every sealed datagram carries. Needed to
+// GCMOverhead is the authentication tag every sealed datagram carries. Needed to
 // size a buffer, and to say what a chunk cost once it was on the wire.
-const gcmOverhead = 16
+const GCMOverhead = 16
 
 // seal produces one datagram. Every copy of a duplicated chunk is sealed
 // separately: identical bytes on the wire would be indistinguishable from a replay
 // and the receiver would drop the second copy, defeating the point.
-func (s *sealer) seal(dst, plain []byte) []byte {
-	var nonce [nonceLen]byte
+func (s *Sealer) Seal(dst, plain []byte) []byte {
+	var nonce [NonceLen]byte
 	binary.BigEndian.PutUint32(nonce[:], s.epoch)
 	binary.BigEndian.PutUint64(nonce[4:], s.ctr.Add(1))
 	dst = append(dst, nonce[:]...)
 	return s.aead.Seal(dst, nonce[:], plain, nil)
 }
 
-func (s *sealer) open(dst, wire []byte) ([]byte, error) {
-	if len(wire) < nonceLen+s.aead.Overhead() {
+func (s *Sealer) Open(dst, wire []byte) ([]byte, error) {
+	if len(wire) < NonceLen+s.aead.Overhead() {
 		return nil, errTooShrt
 	}
-	nonce := wire[:nonceLen]
-	out, err := s.aead.Open(dst, nonce, wire[nonceLen:], nil)
+	nonce := wire[:NonceLen]
+	out, err := s.aead.Open(dst, nonce, wire[NonceLen:], nil)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +111,7 @@ func (s *sealer) open(dst, wire []byte) ([]byte, error) {
 	ok := s.seen.accept(binary.BigEndian.Uint32(nonce), binary.BigEndian.Uint64(nonce[4:]))
 	s.mu.Unlock()
 	if !ok {
-		return nil, errReplay
+		return nil, ErrReplay
 	}
 	return out, nil
 }

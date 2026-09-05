@@ -34,7 +34,7 @@ type Link struct {
 	// false toward the entry. It is what tells a datagram's direction from the
 	// socket it arrived on, so nothing on the wire has to carry one.
 	down   bool
-	seal   *sealer
+	seal   *Sealer
 	remote atomic.Pointer[net.UDPAddr]
 	// wasUp is touched only by the node's timer goroutine, to log transitions.
 	wasUp bool
@@ -100,7 +100,7 @@ func (l *Link) send(plain []byte, n int, rtx bool) {
 		return // a peer that has never spoken has no address to answer at
 	}
 	for i := 0; i < n; i++ {
-		buf := l.seal.seal(make([]byte, 0, nonceLen+len(plain)+gcmOverhead), plain)
+		buf := l.seal.Seal(make([]byte, 0, NonceLen+len(plain)+GCMOverhead), plain)
 		if _, err := l.sock.conn.WriteToUDP(buf, to); err != nil {
 			l.count(func(s *linkStats) { s.dropped++ })
 			return
@@ -219,7 +219,7 @@ func (s *socket) read() {
 			out []byte
 		)
 		for _, c := range s.candidates(from) {
-			if o, err := c.seal.open(plain[:0], buf[:n]); err == nil {
+			if o, err := c.seal.Open(plain[:0], buf[:n]); err == nil {
 				l, out = c, o
 				break
 			}

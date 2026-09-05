@@ -163,7 +163,7 @@ func (d *dir) finish() error {
 // arrived twice from a lossy leg leaves once onto a clean one.
 func (d *dir) transmit(c *chunk, rtx bool) {
 	plain := encode(d.s.id, c, rtx)
-	sealed := nonceLen + len(plain) + gcmOverhead
+	sealed := NonceLen + len(plain) + GCMOverhead
 	for _, l := range d.send {
 		l.send(plain, l.dup, rtx)
 		d.s.wire.Add(uint64(l.dup * sealed))

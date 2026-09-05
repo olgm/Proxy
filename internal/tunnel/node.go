@@ -167,7 +167,7 @@ func New(opt Options) (*Node, error) {
 	if err := opt.Timers.fill(); err != nil {
 		return nil, err
 	}
-	opt.maxChunk = opt.MaxDatagram - nonceLen - 16 - dataHeader
+	opt.maxChunk = opt.MaxDatagram - NonceLen - 16 - dataHeader
 	if opt.maxChunk < 64 {
 		return nil, fmt.Errorf("tunnel: max_datagram %d leaves no room for payload", opt.MaxDatagram)
 	}
@@ -234,7 +234,7 @@ func New(opt Options) (*Node, error) {
 }
 
 func newLink(s *socket, ip netip.Addr, port int, c LinkConfig, down bool) (*Link, error) {
-	seal, err := newSealer(c.Key)
+	seal, err := NewSealer(c.Key)
 	if err != nil {
 		return nil, fmt.Errorf("tunnel: link %s: %w", c.Addr, err)
 	}

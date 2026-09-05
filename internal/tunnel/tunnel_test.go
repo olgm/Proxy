@@ -255,8 +255,8 @@ func TestRelayDeduplicatesThenReduplicates(t *testing.T) {
 // headed toward the exit: a FIN has no payload, and an ACK, the other 16-byte
 // body, travels the other way.
 const (
-	finSize  = nonceLen + 16 + dataHeader
-	headSize = nonceLen + 16 + 1 + 16
+	finSize  = NonceLen + 16 + dataHeader
+	headSize = NonceLen + 16 + 1 + 16
 )
 
 // tailChain is entry -> relay -> exit, one copy per leg, with a tap on each leg
