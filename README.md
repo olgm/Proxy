@@ -479,7 +479,7 @@ The rules are one public port on the entry node, and each hop port opened to the
 previous hop only:
 
 ```sh
-ufw allow 25565/tcp                                       # entry node
+ufw allow <entry-port>/tcp                                # entry node
 ufw allow from <prev-hop-ip> to any port <hop> proto tcp  # every other node
 ufw allow from <prev-hop-ip> to any port <hop> proto udp  # ... on a udp route
 ufw allow from <bot-node-ip> to any port <ctl> proto tcp  # every entry the bot does not live on
@@ -491,6 +491,59 @@ on the same socket. A relay or exit needs one UDP rule per path that reaches it.
 A blocked UDP port cannot be found by connecting to it — that always succeeds — so
 `deploy` asks the near node whether its link has been answered, and waits a few
 seconds before believing it hasn't.
+
+## DNS
+
+`routes[].port` is whatever was free on that node, not whatever is memorable — every
+entry here is on 30001, because v1 still holds 25565 on two of them. A player should
+not have to know that, and does not have to: a Java client given an address with no
+`:port` first looks up `_minecraft._tcp.<name>` and takes the host and port out of
+the SRV record it finds. So publish one, and the address a player types is a bare
+hostname.
+
+```
+; one A record per node, the address the SRV points at
+hk.example.com.                    300 IN A   198.51.100.10
+ty.example.com.                    300 IN A   198.51.100.20
+au.example.com.                    300 IN A   198.51.100.40
+ch.example.com.                    300 IN A   198.51.100.30
+
+; one SRV per name a player may type: priority, weight, port, target
+_minecraft._tcp.hk.example.com.    300 IN SRV 0 5 30001 hk.example.com.
+_minecraft._tcp.ty.example.com.    300 IN SRV 0 5 30001 ty.example.com.
+_minecraft._tcp.au.example.com.    300 IN SRV 0 5 30001 au.example.com.
+_minecraft._tcp.ch.example.com.    300 IN SRV 0 5 30001 ch.example.com.
+```
+
+`hk.example.com` in the server list then reaches `198.51.100.10:30001`. The name and
+the SRV target may be the same label, as above, or the target may be a separate
+`nodes.hk.example.com` — the SRV is what carries the port either way.
+
+Four things that bite:
+
+- **The target must be a hostname with an A or AAAA record.** Not an IP literal, and
+  per RFC 2782 not a CNAME. Resolvers vary in how forgiving they are; do not rely on
+  it.
+- **An explicit port skips the lookup.** A player who types `hk.example.com:30001`
+  gets no SRV query at all, which is the fallback if a record is wrong, and the
+  reason a stale SRV can look like it works for the person who tested it.
+- **Behind Cloudflare, the A record must be DNS-only** — grey cloud, not orange. The
+  HTTP proxy does not carry a Minecraft TCP session, and an orange-clouded record
+  hands out Cloudflare's addresses instead of the node's. SRV records are never
+  proxied.
+- **Bedrock clients do not do SRV.** They need the port typed into the field the app
+  gives them for it. This is a Java accelerator, so that is academic here.
+
+What the player types travels to us in the handshake, and the ingress rewrites it to
+`target.rewrite_host` before anything is forwarded — so the name you publish is only
+ever seen by us, and does not have to be one Hypixel would recognise. It is also the
+name the whole chain is reached by: an entry is a whole path, so `au.example.com` is
+Sydney's route to the exit and `ch.example.com` is the exit alone.
+
+One SRV per entry, each naming its own node, is the shape to prefer. Pointing several
+targets at one name and leaning on priority and weight to fail over is not something
+Minecraft clients agree about, and a client that picks a node that is down does not
+retry the next one.
 
 ## Verify
 
