@@ -136,6 +136,13 @@ type Node struct {
 	// lastUp is the last tick at which any link had answered a ping. Touched only
 	// by the timer goroutine.
 	lastUp time.Time
+
+	// chain is what the entry knows about the round trip to the far end of the
+	// tunnel: the echoes it has outstanding, and the smoothed time they took.
+	chainMu  sync.Mutex
+	chainRTT time.Duration
+	echoSeq  uint64
+	echoAt   map[uint64]time.Time
 }
 
 func New(opt Options) (*Node, error) {
@@ -166,7 +173,8 @@ func New(opt Options) (*Node, error) {
 	}
 
 	n := &Node{opt: opt, accept: make(chan *Stream, acceptBacklog),
-		streams: map[uint64]*Stream{}, stop: make(chan struct{}), lastUp: time.Now()}
+		streams: map[uint64]*Stream{}, stop: make(chan struct{}), lastUp: time.Now(),
+		echoAt: map[uint64]time.Time{}}
 
 	if len(opt.Peers) > 0 {
 		addr, err := net.ResolveUDPAddr("udp", opt.Bind)
@@ -315,6 +323,23 @@ func (n *Node) handle(l *Link, p packet) {
 	case msgPong:
 		l.pong(p.nonce)
 		return
+	case msgEcho:
+		// Pass it on while there is chain left, and turn it around where there is
+		// not. A node with no hops is the exit, which is as far as anything of ours
+		// goes: one hop further is the backend.
+		if len(n.down) > 0 {
+			n.flood(n.down, msgEcho, p.nonce)
+		} else {
+			l.send(appendEcho(nil, msgEchoReply, p.nonce), 1, false)
+		}
+		return
+	case msgEchoReply:
+		if len(n.up) > 0 {
+			n.flood(n.up, msgEchoReply, p.nonce)
+		} else {
+			n.chainPong(p.nonce)
+		}
+		return
 	}
 
 	n.mu.Lock()
@@ -461,6 +486,9 @@ func (n *Node) timers() {
 					log.Printf("%s: link %s %s", n.opt.Name, l, upWord(u))
 				}
 			}
+			if n.originates() {
+				n.chainEcho()
+			}
 		case now := <-sweep.C:
 			n.sweep(now)
 		case <-stat.C:
@@ -529,6 +557,71 @@ func (n *Node) logStats() {
 }
 
 func ms(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
+
+// ChainRTT is the round trip from here to the far end of the tunnel and back, or
+// zero at a node that does not originate echoes or has not had one answered yet.
+//
+// The ingress reports this as the latency of a status ping, so a player sees the
+// distance to the last node that is ours instead of the distance to the first.
+// See internal/proxy.
+func (n *Node) ChainRTT() time.Duration {
+	n.chainMu.Lock()
+	defer n.chainMu.Unlock()
+	return n.chainRTT
+}
+
+// originates reports whether this node is the end that starts echoes. Only the
+// entry does: it is the one with somewhere to send them and nobody behind it.
+func (n *Node) originates() bool { return len(n.up) == 0 && len(n.down) > 0 }
+
+// chainEcho starts one measurement. With more than one hop it goes down every path
+// and the first answer back wins, which is the same thing the data plane does.
+func (n *Node) chainEcho() {
+	now := time.Now()
+	n.chainMu.Lock()
+	// An echo that was never answered is a lost datagram, not a slow one. Drop it
+	// rather than let it age into a wrong sample or sit in the map for ever.
+	stale := 5 * n.opt.Timers.Ping
+	for id, at := range n.echoAt {
+		if now.Sub(at) > stale {
+			delete(n.echoAt, id)
+		}
+	}
+	n.echoSeq++
+	id := n.echoSeq
+	n.echoAt[id] = now
+	n.chainMu.Unlock()
+
+	n.flood(n.down, msgEcho, id)
+}
+
+// chainPong folds one answered echo into the smoothed round trip. Copies of the
+// same echo arrive when the chain races several paths; the first is the one that
+// says how fast the chain is, so the rest are dropped by the id already being gone.
+func (n *Node) chainPong(id uint64) {
+	n.chainMu.Lock()
+	defer n.chainMu.Unlock()
+	at, ok := n.echoAt[id]
+	if !ok {
+		return
+	}
+	delete(n.echoAt, id)
+	r := time.Since(at)
+	if n.chainRTT == 0 {
+		n.chainRTT = r
+		return
+	}
+	n.chainRTT = (7*n.chainRTT + r) / 8
+}
+
+// flood sends one small control datagram on every link in a direction. Echoes carry
+// no sequence number, so there is nothing for a relay to de-duplicate: a copy that
+// arrives second is dropped by the originator instead.
+func (n *Node) flood(links []*Link, t msgType, nonce uint64) {
+	for _, l := range links {
+		l.send(appendEcho(nil, t, nonce), 1, false)
+	}
+}
 
 func (s *Stream) gone() bool {
 	s.mu.Lock()

@@ -21,6 +21,8 @@ func TestWireRoundTrip(t *testing.T) {
 		{"reset", appendReset(nil, 4), packet{typ: msgReset, stream: 4}},
 		{"ping", appendEcho(nil, msgPing, 55), packet{typ: msgPing, nonce: 55}},
 		{"pong", appendEcho(nil, msgPong, 55), packet{typ: msgPong, nonce: 55}},
+		{"echo", appendEcho(nil, msgEcho, 56), packet{typ: msgEcho, nonce: 56}},
+		{"echo reply", appendEcho(nil, msgEchoReply, 56), packet{typ: msgEchoReply, nonce: 56}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

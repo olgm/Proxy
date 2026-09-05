@@ -33,6 +33,14 @@ const (
 	// a sender that has gone quiet with chunks outstanding says how far it got,
 	// and the receiver turns everything it has not seen below that into holes.
 	msgHead msgType = 7
+	// msgEcho and msgEchoReply time the whole chain rather than one leg of it.
+	// msgPing stops at the next node; this one is passed along until it runs out
+	// of hops, and the far end turns it around. It carries no stream and opens
+	// none, which is the point: the exit dials the backend when a stream opens, so
+	// measuring the chain with real traffic would mean a connection to Hypixel per
+	// measurement. See agents/operational-safety.md.
+	msgEcho      msgType = 8
+	msgEchoReply msgType = 9
 )
 
 // flagFin marks the last chunk of a direction. Its payload may be empty: the
@@ -154,7 +162,7 @@ func decode(b []byte) (packet, error) {
 			return packet{}, errShort
 		}
 		p.stream = binary.BigEndian.Uint64(b)
-	case msgPing, msgPong:
+	case msgPing, msgPong, msgEcho, msgEchoReply:
 		if len(b) < 8 {
 			return packet{}, errShort
 		}

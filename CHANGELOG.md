@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `internal/tunnel`: an ECHO message that times the whole chain instead of one leg
+  of it. A node passes it along while it has hops, and the node with none left —
+  the exit — turns it around, so it measures as far as our own infrastructure goes
+  and no further. It carries no stream and opens none, which is the point: the exit
+  dials the backend when a stream opens, so measuring with real traffic would mean a
+  connection to Hypixel per measurement. Only the entry originates one, on the link
+  ping interval; the first reply for a nonce wins and `Node.ChainRTT` smooths it the
+  way a leg smooths its own round trip.
 - `proxyd`: a handshake naming a next state other than status, login or transfer is
   rejected instead of parsed. Encode re-emits whatever was read, so an unknown one
   was forwarded to the backend verbatim: eight bytes from anyone at all, turned into

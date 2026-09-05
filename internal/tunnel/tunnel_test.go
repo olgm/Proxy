@@ -531,3 +531,78 @@ func TestFreshStreamSurvivesLinksNotYetUp(t *testing.T) {
 		t.Fatalf("got %d bytes, want %d", len(got), len(body))
 	}
 }
+
+// echoChain is a three-node chain with a known one-way delay on every leg and a
+// ping timer fast enough for a test to wait on.
+func echoChain(t *testing.T, leg time.Duration) (entry, exit *Node) {
+	t.Helper()
+	timers := Timers{Ping: 50 * time.Millisecond}
+	k1, k2 := NewKey(), NewKey()
+	exit = mustNode(t, Options{Name: "exit", Bind: local("0"), Timers: timers,
+		Peers: []LinkConfig{{Addr: "127.0.0.1", Key: k2}}})
+	w2 := newDelayedWire(t, exit.Addr(), nil, leg)
+	relay := mustNode(t, Options{Name: "relay", Bind: local("0"), Timers: timers,
+		Peers: []LinkConfig{{Addr: "127.0.0.1", Key: k1}},
+		Hops:  []LinkConfig{{Addr: w2.String(), Key: k2}}})
+	w1 := newDelayedWire(t, relay.Addr(), nil, leg)
+	entry = mustNode(t, Options{Name: "entry", Timers: timers,
+		Hops: []LinkConfig{{Addr: w1.String(), Key: k1}}})
+	return entry, exit
+}
+
+func waitChainRTT(t *testing.T, n *Node) time.Duration {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if d := n.ChainRTT(); d > 0 {
+			return d
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("chain rtt never measured")
+	return 0
+}
+
+// The entry times the whole tunnel, not the one leg its own pings cover. Four
+// delayed traversals separate it from the exit, so a measurement that came back as
+// one leg's worth would be half of what it should be.
+func TestChainEchoTimesTheWholeTunnel(t *testing.T) {
+	const leg = 10 * time.Millisecond
+	entry, exit := echoChain(t, leg)
+	got := waitChainRTT(t, entry)
+
+	if want := 4 * leg; got < want-5*time.Millisecond || got > want+80*time.Millisecond {
+		t.Errorf("chain rtt %v, want about %v", got, want)
+	}
+	// Half of it is not enough: that would be the entry timing its own leg and
+	// calling it the chain.
+	if got < 2*leg+5*time.Millisecond {
+		t.Errorf("chain rtt %v looks like a single leg, not the chain", got)
+	}
+
+	// The whole reason this is its own message: the exit dials the backend when a
+	// stream opens, so a chain measurement that opened one would be a connection to
+	// Hypixel every time. See agents/operational-safety.md.
+	exit.mu.Lock()
+	streams := len(exit.streams)
+	exit.mu.Unlock()
+	if streams != 0 {
+		t.Errorf("measuring the chain opened %d stream(s) at the exit", streams)
+	}
+}
+
+// A relay is not an end of the tunnel and must not answer for one, or the entry
+// would be told the chain is as short as its first hop.
+func TestOnlyTheExitAnswersAnEcho(t *testing.T) {
+	entry, exit := echoChain(t, time.Millisecond)
+	waitChainRTT(t, entry)
+	if entry.originates() != true {
+		t.Error("entry should originate echoes")
+	}
+	if exit.originates() {
+		t.Error("the exit originated an echo; only the entry may")
+	}
+	if exit.ChainRTT() != 0 {
+		t.Errorf("the exit measured a chain rtt of %v; it has no chain ahead of it", exit.ChainRTT())
+	}
+}
