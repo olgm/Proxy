@@ -26,14 +26,16 @@ onward.
 Needs Go and ssh locally; root or passwordless sudo on each node.
 
 ```sh
-cp topology.example.json topology.json     # edit
+cp topology.example.json topology.json     # edit; delete the discord block to run without the bot
 cp whitelist.example.txt whitelist.txt     # edit, or drop `whitelist` from the route
 go run ./cmd/proxyctl config               # preview, changes nothing
 go run ./cmd/proxyctl deploy
 go run ./cmd/proxyctl status
+go run ./cmd/proxyctl whitelist list       # once deployed: manage the list from here
 ```
 
-Commands: `config`, `deploy`, `status`, `uninstall`.
+Commands: `config`, `deploy`, `status`, `uninstall`, `whitelist`. The Discord bot
+needs one more thing before `deploy`; see "Discord bot" below.
 
 ## topology.json
 
@@ -55,8 +57,14 @@ Commands: `config`, `deploy`, `status`, `uninstall`.
 | `routes[].tunnel` | UDP only; sizes, deadlines and every timer — see below |
 | `routes[].target` | final `addr`, plus `rewrite_host` / `rewrite_port` |
 | `routes[].whitelist` | optional; local `ign:uuid` file seeded onto the entry node |
+| `discord` | optional; deploys the bot — see below |
+| `discord.node` | node the bot runs on. Default: the first entry with a whitelist |
+| `discord.guild` | the server's id |
+| `discord.roles.<id>` | what a role grants: `{"accounts": N}` or `{"manage": true}` |
+| `discord.audit_channel` | optional; channel that gets one line per change |
 
-Hop ports are allocated automatically. `config` prints the map.
+Hop ports are allocated automatically, and so is one control port per entry with a
+whitelist. `config` prints the map.
 
 ## Transport
 
@@ -213,10 +221,20 @@ Notch:069a79f4-44e9-4726-a5be-fca90e38aaf5
 
 Point `routes[].whitelist` at the file and `deploy` seeds it to
 `/var/lib/proxyd/whitelist.txt`, **once**. After that the node owns it: proxyd
-rewrites the IGN column when a player renames, so later deploys leave it alone. Edit
-it there to add or remove people; the change is picked up on the next login, without
-a restart that would drop everyone mid-session. A file that fails to parse leaves the
-last good list in place.
+rewrites the IGN column when a player renames, so later deploys leave it alone. Add
+and remove people with `proxyctl whitelist` from your machine, through the Discord
+bot, or by editing the file on the node; a change is picked up on the next login,
+without a restart that would drop everyone mid-session. A file that fails to parse
+leaves the last good list in place.
+
+Anything after a `#` on a player line is that line's tag, kept through renames. The
+bot writes the Discord id of whoever added the player there, and that tag is the
+whole ownership model: a member may remove only lines tagged with their id.
+
+```
+Notch:069a79f4-44e9-4726-a5be-fca90e38aaf5 # discord:123456789012345678
+Friend:5bc1b7b1-1c8b-4f8e-9c2e-7f2a0d3e4b5c # cli
+```
 
 Which field is checked depends on how old the client is — the UUID only exists in
 Login Start from 1.19, and is only mandatory from 1.20.2:
@@ -303,6 +321,107 @@ exchange a client cannot forge. Not implemented.
 So: the whitelist keeps uninvited players off the chain. Treat it as a door lock, not
 a security boundary.
 
+## Control link
+
+Every entry that holds a whitelist also runs a small TCP listener through which the
+list is managed from outside proxyd: by `proxyctl` over ssh, and by the Discord bot
+from whichever node it lives on. `config` shows it as the `control` line. It takes
+the port after the hops, and a key of its own, minted into `tunnel-keys.json` as
+`ctl|<node>` beside the leg keys.
+
+One request per connection. The node sends a random challenge, the client answers
+with one frame sealed under the key with that challenge as associated data, and the
+reply is sealed the same way, so a recorded exchange replays into nothing. A frame
+that does not open gets no reply at all. Loopback may always connect; the bot's node
+may once a `discord` block names it, and that is a TCP address, so trusting it is
+sound in a way it would not be over UDP. proxyd stays the only writer of its file.
+
+Three operations: `list`, `add`, `remove`. An add given only a name has the UUID
+resolved against Mojang on the node, and the name written the way Mojang spells it;
+given only a UUID, the name. A UUID already listed is refused, naming the line it
+has, so nobody re-tags someone else's. On the node itself:
+
+```sh
+proxyd ctl list
+proxyd ctl add Notch                # resolved against Mojang
+proxyd ctl add Notch <uuid> cli     # both halves given: no lookup
+proxyd ctl remove notch
+```
+
+From your machine, `proxyctl whitelist list | add <name> [uuid] | remove <name|uuid>`
+runs that on **every** entry that holds a whitelist. Every such entry carries the
+same list: a player is whitelisted on the chain, not on a node. `list` prints the
+entries side by side and marks any line that is not on all of them; an add or remove
+that one entry could not take is reported, and the fix is to run it again, or to let
+the bot's reconcile settle it.
+
+### Several entries
+
+Two writes can never be atomic, so one entry is the **primary**: the bot's node when
+that is a whitelisted entry, otherwise the first whitelisted entry in route order.
+An operation goes to the primary first and stops if the primary refuses. Every five
+minutes the bot lists every entry and makes each other one's set of UUID and tag
+match the primary's. Names are never compared, because each node keeps its own:
+renamed on login, refreshed daily, and free to differ for a day. So: hand-edit the
+primary, or use the CLI or the bot. A hand edit on another entry is undone at the
+next reconcile. Without a bot nothing reconciles, and the CLI's report is what tells
+you an entry is behind.
+
+## Discord bot
+
+`proxybot` lets members of one Discord server manage their own whitelist entries,
+within what their roles allow. It runs on one node — `discord.node`, by default the
+primary — and reaches every entry over its control link, so it keeps no state of its
+own: the whitelist files are the truth, and the tags in them say whose line is whose.
+
+Setting it up, once:
+
+1. [discord.com/developers](https://discord.com/developers/applications): New
+   Application → Bot → Reset Token, and keep the token. Under OAuth2 → URL Generator
+   pick the scopes `bot` and `applications.commands`, no permissions, open the URL
+   and invite it. The bot needs no privileged intent and no channel permission.
+2. In Discord, Settings → Advanced → Developer Mode. Right-click the server, each
+   role that should count, and the audit channel if you want one, and Copy ID.
+3. Fill the `discord` block in `topology.json` with those ids. A role grants either
+   an account cap or manage; a member with several roles gets the highest cap, and
+   manage if any of them says so. Members with none of the listed roles cannot use
+   the bot.
+4. Put the token in `.env` as `DISCORD_BOT_TOKEN=...`, then `set -a; . ./.env; set +a`
+   and `proxyctl deploy`. The token travels inside the install script over ssh into
+   `/etc/proxyd/bot.env`, root-only, read by the unit; it is never on a command line
+   and never in `/tmp`. A later deploy without it in the environment keeps the file.
+
+Commands, all replying privately to whoever ran them:
+
+| command | who | does |
+| --- | --- | --- |
+| `/whitelist add <ign>` | any listed role, up to its cap | lists the account under your id, on every entry |
+| `/whitelist add <ign> user:@x` | managers | lists it under that member's id |
+| `/whitelist remove <player>` | the line's owner; managers, any line | drops it everywhere |
+| `/whitelist list` | anyone: own lines. managers: every line, with owners | |
+| `/whitelist list user:@x` | managers | that member's lines |
+| `/whitelist purge user:@x` | managers | drops every line that member owns |
+
+A cap counts the lines tagged with the member's id. Managers have no cap. A name
+nobody holds, a name Mojang could not be asked about, and an account someone else
+already listed are each told apart in the reply.
+
+The whitelist follows the role. Every five minutes the bot asks Discord about each
+member who owns a line — one Get Guild Member call each, which needs no privileged
+intent — and drops the lines of anyone who left the server or no longer holds any
+listed role. A member Discord could not be asked about keeps their lines until it
+can. A cap that was lowered only blocks new adds. Every change the bot makes is in
+the node's journal, and in the audit channel when one is set.
+
+`proxyctl status` reports the bot beside the nodes. `proxyctl uninstall` removes it,
+including the token file.
+
+What the bot does not change: the whitelist is still a door lock and not
+authentication, the entry address is still something to hand out narrowly until the
+ingress rate limit exists, and the bot never prints that address. Anyone with Manage
+Roles in the server can hand out a listed role, which is Discord's trust model, not
+ours.
+
 ## Firewall
 
 After deploy, proxyctl tests every link from the side that will really dial it and
@@ -317,6 +436,7 @@ previous hop only:
 ufw allow 25565/tcp                                       # entry node
 ufw allow from <prev-hop-ip> to any port <hop> proto tcp  # every other node
 ufw allow from <prev-hop-ip> to any port <hop> proto udp  # ... on a udp route
+ufw allow from <bot-node-ip> to any port <ctl> proto tcp  # every entry the bot does not live on
 ```
 
 The entry needs nothing inbound for a UDP route: it dials out and answers come back
