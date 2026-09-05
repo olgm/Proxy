@@ -1,6 +1,7 @@
 package mojang
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -111,5 +112,47 @@ func TestUUIDForIsGatedAndNameForIsNot(t *testing.T) {
 	}
 	if calls != 6 {
 		t.Fatalf("%d refresh lookups reached the network, want 6", calls)
+	}
+}
+
+// The control link adds players by name, and the reply to a member differs
+// between a name nobody holds and Mojang not answering.
+func TestLookupNameTellsUnknownFromUnreachable(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"id":"069a79f444e94726a5befca90e38aaf5","name":"Notch"}`))
+	})
+	uuid, name, err := c.LookupName("notch")
+	if err != nil || uuid != "069a79f444e94726a5befca90e38aaf5" || name != "Notch" {
+		t.Fatalf("LookupName = %q, %q, %v", uuid, name, err)
+	}
+
+	c = testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	if _, _, err := c.LookupName("Nobody"); !errors.Is(err, ErrNoSuchPlayer) {
+		t.Fatalf("unknown name: %v", err)
+	}
+
+	c = testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	})
+	if _, _, err := c.LookupName("Notch"); err == nil || errors.Is(err, ErrNoSuchPlayer) {
+		t.Fatalf("unreachable read as an answer: %v", err)
+	}
+}
+
+func TestLookupUUIDIsNotGated(t *testing.T) {
+	calls := 0
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Write([]byte(`{"id":"069a79f444e94726a5befca90e38aaf5","name":"Notch"}`))
+	})
+	for i := 0; i < 6; i++ {
+		if name, err := c.LookupUUID("069a79f4-44e9-4726-a5be-fca90e38aaf5"); err != nil || name != "Notch" {
+			t.Fatalf("LookupUUID = %q, %v", name, err)
+		}
+	}
+	if calls != 6 {
+		t.Fatalf("%d lookups reached the network, want 6", calls)
 	}
 }
