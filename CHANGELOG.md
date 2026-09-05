@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `proxyd`: a whitelist line may end in `# tag`, kept through renames, and the list
+  can be added to and removed from in place, reloading first so an edit made on the
+  node between two operations survives. The tag is how the Discord bot will know
+  whose line is whose; a UUID already listed is refused with the tag it carries.
 - `proxyd`: config-driven relay node. Handshake rewrite (Forge markers preserved,
   BungeeCord identity stripped), source-IP allowlist, `splice(2)` relay with
   per-direction half-close, legacy `0xFE` ping rejected.

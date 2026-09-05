@@ -8,10 +8,12 @@
 package whitelist
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -28,11 +30,14 @@ type Mojang interface {
 	UUIDFor(name, ip string) (string, bool)
 }
 
-// List is a file-backed set of players, in `ign:uuid` lines. Comments (`#`) and
-// blank lines are preserved so an operator can annotate the file.
+// List is a file-backed set of players, in `ign:uuid` lines, each optionally
+// followed by `# tag`. Comments (`#`) and blank lines are preserved so an operator
+// can annotate the file.
 //
 // The UUID column is the identity; the name column is only a cache of what that
-// UUID is called today, kept fresh against Mojang.
+// UUID is called today, kept fresh against Mojang. The tag is whatever the writer
+// of the line wants remembered about it: the Discord bot records who added a
+// player there, and removes only lines carrying that member's tag.
 type List struct {
 	path   string
 	mojang Mojang
@@ -49,8 +54,39 @@ type List struct {
 type entry struct {
 	name string
 	uuid string // as written in the file, dashed or bare
+	tag  string // the trailing comment, without its #
 	line int    // index into List.lines
 }
+
+// format is the line an entry is written as.
+func (e *entry) format() string {
+	s := e.name + ":" + e.uuid
+	if e.tag != "" {
+		s += " # " + e.tag
+	}
+	return s
+}
+
+// Entry is one player, as the file records them.
+type Entry struct {
+	Name string
+	UUID string
+	Tag  string
+}
+
+// ListedError is returned by Add for a UUID already on the list, carrying the line
+// it is listed as, so the caller can say whose it is.
+type ListedError struct{ Entry }
+
+func (e *ListedError) Error() string {
+	if e.Tag == "" {
+		return fmt.Sprintf("whitelist: %s is already listed as %s", e.UUID, e.Name)
+	}
+	return fmt.Sprintf("whitelist: %s is already listed as %s (%s)", e.UUID, e.Name, e.Tag)
+}
+
+// ErrNotListed is returned by Remove for a UUID that is not on the list.
+var ErrNotListed = errors.New("whitelist: not listed")
 
 // Open loads the list. A list that cannot be read or parsed is an error: an ingress
 // configured to be gated must not come up ungated. A nil Mojang leaves the list
@@ -68,6 +104,79 @@ func (l *List) Len() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return len(l.byUUID)
+}
+
+// Entries returns the list in file order.
+func (l *List) Entries() []Entry {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.reload()
+	es := make([]*entry, 0, len(l.byUUID))
+	for _, e := range l.byUUID {
+		es = append(es, e)
+	}
+	sort.Slice(es, func(i, j int) bool { return es[i].line < es[j].line })
+	out := make([]Entry, len(es))
+	for i, e := range es {
+		out[i] = Entry{Name: e.name, UUID: e.uuid, Tag: e.tag}
+	}
+	return out
+}
+
+// Add appends a player. The UUID is the identity, so one that is already listed is
+// refused rather than renamed or re-tagged; see ListedError. The name is written as
+// given, so a caller that resolved it against Mojang passes the canonical spelling.
+func (l *List) Add(name, uuid, tag string) error {
+	if name == "" || strings.ContainsAny(name, ":# \t\r\n") {
+		return fmt.Errorf("whitelist: %q is not a name", name)
+	}
+	key := normalize(uuid)
+	if !validUUID(key) {
+		return fmt.Errorf("whitelist: %q is not a uuid", uuid)
+	}
+	tag = strings.TrimSpace(tag)
+	if strings.ContainsAny(tag, "\r\n") {
+		return fmt.Errorf("whitelist: tag %q spans lines", tag)
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.reload()
+	if e, ok := l.byUUID[key]; ok {
+		return &ListedError{Entry{Name: e.name, UUID: e.uuid, Tag: e.tag}}
+	}
+	if len(l.lines) == 1 && l.lines[0] == "" {
+		l.lines = l.lines[:0] // an empty file, not a file with one blank line
+	}
+	e := &entry{name: name, uuid: uuid, tag: tag, line: len(l.lines)}
+	l.lines = append(l.lines, e.format())
+	l.byUUID[key] = e
+	l.reindex()
+	log.Printf("whitelist: added %s", e.format())
+	return l.save()
+}
+
+// Remove drops a player's line. Every other line, comments included, stays as it
+// was. A player already connected is not affected: the list is checked at login.
+func (l *List) Remove(uuid string) (Entry, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.reload()
+	e, ok := l.byUUID[normalize(uuid)]
+	if !ok {
+		return Entry{}, ErrNotListed
+	}
+	removed := Entry{Name: e.name, UUID: e.uuid, Tag: e.tag}
+	l.lines = append(l.lines[:e.line], l.lines[e.line+1:]...)
+	delete(l.byUUID, normalize(uuid))
+	for _, o := range l.byUUID {
+		if o.line > e.line {
+			o.line--
+		}
+	}
+	l.reindex()
+	log.Printf("whitelist: removed %s", e.format())
+	return removed, l.save()
 }
 
 // Check reports whether a login from ip may proceed.
@@ -152,7 +261,7 @@ func (l *List) claimedBy(name, ip string) bool {
 func (l *List) apply(e *entry, name string) {
 	log.Printf("whitelist: %s is now %s (%s)", e.name, name, e.uuid)
 	e.name = name
-	l.lines[e.line] = name + ":" + e.uuid
+	l.lines[e.line] = e.format()
 }
 
 // rename applies one change and writes the file back. Every rename is logged: it is
@@ -214,31 +323,47 @@ func (l *List) load() error {
 	}
 
 	lines := strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
-	byUUID := map[string]*entry{}
-	for i, raw := range lines {
-		s := strings.TrimSpace(raw)
-		if s == "" || strings.HasPrefix(s, "#") {
-			continue
-		}
-		name, uuid, ok := strings.Cut(s, ":")
-		name, uuid = strings.TrimSpace(name), strings.TrimSpace(uuid)
-		if !ok || name == "" {
-			return fmt.Errorf("%s:%d: want ign:uuid, got %q", l.path, i+1, s)
-		}
-		key := normalize(uuid)
-		if len(key) != 32 || strings.TrimLeft(key, "0123456789abcdef") != "" {
-			return fmt.Errorf("%s:%d: %q is not a uuid", l.path, i+1, uuid)
-		}
-		if _, dup := byUUID[key]; dup {
-			return fmt.Errorf("%s:%d: %s is listed twice", l.path, i+1, uuid)
-		}
-		byUUID[key] = &entry{name: name, uuid: uuid, line: i}
+	byUUID, err := l.parse(lines)
+	if err != nil {
+		return err
 	}
 
 	l.lines, l.byUUID = lines, byUUID
 	l.reindex()
 	l.mtime, l.size, l.mode = fi.ModTime(), fi.Size(), fi.Mode().Perm()
 	return nil
+}
+
+// parse reads player lines into entries. A `#` ends the player part of a line;
+// what follows it is the entry's tag.
+func (l *List) parse(lines []string) (map[string]*entry, error) {
+	byUUID := map[string]*entry{}
+	for i, raw := range lines {
+		s := strings.TrimSpace(raw)
+		if s == "" || strings.HasPrefix(s, "#") {
+			continue
+		}
+		s, tag, _ := strings.Cut(s, "#")
+		name, uuid, ok := strings.Cut(s, ":")
+		name, uuid = strings.TrimSpace(name), strings.TrimSpace(uuid)
+		if !ok || name == "" {
+			return nil, fmt.Errorf("%s:%d: want ign:uuid, got %q", l.path, i+1, strings.TrimSpace(s))
+		}
+		key := normalize(uuid)
+		if !validUUID(key) {
+			return nil, fmt.Errorf("%s:%d: %q is not a uuid", l.path, i+1, uuid)
+		}
+		if _, dup := byUUID[key]; dup {
+			return nil, fmt.Errorf("%s:%d: %s is listed twice", l.path, i+1, uuid)
+		}
+		byUUID[key] = &entry{name: name, uuid: uuid, tag: strings.TrimSpace(tag), line: i}
+	}
+	return byUUID, nil
+}
+
+// validUUID accepts a normalized uuid: 32 hex digits.
+func validUUID(key string) bool {
+	return len(key) == 32 && strings.TrimLeft(key, "0123456789abcdef") == ""
 }
 
 // save rewrites the file atomically. A torn write would be read straight back by the

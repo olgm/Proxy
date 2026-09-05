@@ -9,5 +9,8 @@
 #   curl -s https://api.mojang.com/users/profiles/minecraft/<ign>
 #
 # Neither field can be verified here — see the whitelist section of README.md.
+#
+# Anything after a # on a player line is that line's tag, kept through renames. The
+# Discord bot writes who added the player there and only removes lines it tagged.
 
 Notch:069a79f4-44e9-4726-a5be-fca90e38aaf5
