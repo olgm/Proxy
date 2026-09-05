@@ -25,6 +25,12 @@ type LoginStart struct {
 	// HasUUID is false for every client before 1.19, and for 1.19–1.20.1 clients
 	// that chose not to send one. Those logins can only be matched on Name.
 	HasUUID bool
+	// Trailing reports that the packet did not end where the protocol version said
+	// it would. The version is the client's unverified word like everything else
+	// here, so a mismatch means we read the packet by the wrong layout and whatever
+	// we took for a UUID was some other field. It is dropped rather than trusted;
+	// see ReadLoginStart.
+	Trailing bool
 }
 
 // UUIDString renders the UUID in the canonical dashed form, or "" when the client
@@ -49,6 +55,15 @@ func (l *LoginStart) UUIDString() string {
 //
 // The layout after the name depends on the protocol version — see
 // agents/hypixel-protocol.md §2 — so the handshake's version has to be passed in.
+//
+// A correct branch consumes the body exactly. Bytes left over mean the version and
+// the payload disagree, which a snapshot client does by construction: it reports
+// 0x40000000|n, a number past every threshold here, so a snapshot of anything
+// before 1.20.2 lands on the newest layout and reads a signature block as a UUID.
+// Rather than hand that to the whitelist as an identity, drop it and let the name
+// match. That is strictly safer — a client willing to lie about its version could
+// have sent a bare name to begin with — and it keeps a version we have mismodelled
+// from locking out the player behind it.
 func ReadLoginStart(r *bufio.Reader, proto int32) (*LoginStart, []byte, error) {
 	length, hdr, err := readVarIntRaw(r)
 	if err != nil {
@@ -94,6 +109,10 @@ func ReadLoginStart(r *bufio.Reader, proto int32) (*LoginStart, []byte, error) {
 		}
 		io.ReadFull(buf, l.UUID[:])
 		l.HasUUID = true
+	}
+	if buf.Len() != 0 {
+		l.Trailing = true
+		l.UUID, l.HasUUID = [16]byte{}, false
 	}
 	return l, append(hdr, body...), nil
 }

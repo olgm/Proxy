@@ -42,6 +42,7 @@ var (
 	ErrLegacyPing = errors.New("mc: legacy (pre-1.7) ping not supported")
 	ErrMalformed  = errors.New("mc: malformed handshake")
 	ErrTooLarge   = errors.New("mc: handshake too large")
+	ErrIntent     = errors.New("mc: handshake names no known next state")
 )
 
 // Handshake is the serverbound handshake packet (ID 0x00).
@@ -106,7 +107,15 @@ func ReadHandshake(r *bufio.Reader) (*Handshake, error) {
 	if err != nil {
 		return nil, ErrMalformed
 	}
+	// Everything else in this packet we either overwrite (address, port) or pass
+	// through as the client's own problem (protocol version). The intent we act on
+	// and then re-emit, so an unknown one would be forwarded to the backend
+	// verbatim: eight bytes from anyone at all, turned into a malformed handshake
+	// arriving from our egress address. See agents/operational-safety.md.
 	h.Intent = Intent(intent)
+	if h.Intent < IntentStatus || h.Intent > IntentTransfer {
+		return nil, ErrIntent
+	}
 	return h, nil
 }
 

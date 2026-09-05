@@ -163,3 +163,39 @@ func TestEncodeLoginDisconnect(t *testing.T) {
 		t.Fatalf("text %q", chat.Text)
 	}
 }
+
+// A snapshot client reports 0x40000000|n, which is past every threshold in the
+// parse, so a snapshot of anything before 1.20.2 lands on the newest layout and
+// reads a signature block where a UUID should be. Trust the name instead of a UUID
+// we know we misread: handing that to the whitelist denies a listed player.
+func TestSnapshotProtocolDropsMisreadUUID(t *testing.T) {
+	// A 1.19.1-shaped Login Start: signature block, then the real UUID.
+	tail := []byte{0x01}                    // has signature
+	tail = append(tail, make([]byte, 8)...) // expiry
+	tail = appendVarInt(tail, 162)          // public key
+	tail = append(tail, bytes.Repeat([]byte{0xAB}, 162)...)
+	tail = appendVarInt(tail, 512) // signature over it
+	tail = append(tail, bytes.Repeat([]byte{0xCD}, 512)...)
+	tail = append(tail, 0x01) // has uuid
+	tail = append(tail, testUUID[:]...)
+	frame := loginFrame("Notch", tail)
+
+	release, _, _ := readLogin(t, frame, 760)
+	if !release.HasUUID || release.UUIDString() != "069a79f4-44e9-4726-a5be-fca90e38aaf5" {
+		t.Fatalf("release 760 misparsed: %+v", release)
+	}
+	if release.Trailing {
+		t.Fatal("a correct branch left bytes over")
+	}
+
+	snapshot, _, _ := readLogin(t, frame, 0x40000000|760)
+	if !snapshot.Trailing {
+		t.Fatal("snapshot version was not detected as a layout mismatch")
+	}
+	if snapshot.HasUUID {
+		t.Fatalf("kept a UUID read by the wrong layout: %s", snapshot.UUIDString())
+	}
+	if snapshot.Name != "Notch" {
+		t.Fatalf("name lost: %q", snapshot.Name)
+	}
+}

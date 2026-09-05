@@ -127,3 +127,20 @@ func TestLongAddressWithinLimit(t *testing.T) {
 		t.Fatalf("bungee payload not stripped: %q", h.Address)
 	}
 }
+
+// An intent we do not know is an intent we would re-emit: Encode writes back
+// whatever was parsed, so accepting one turns eight bytes from any stranger into a
+// malformed handshake arriving at the backend from our egress address.
+func TestUnknownIntentRejected(t *testing.T) {
+	for _, intent := range []Intent{-1, 0, 4, 47, 1 << 30} {
+		br := bufio.NewReader(bytes.NewReader(frame(765, "mc.example.com", 25565, intent)))
+		if _, err := ReadHandshake(br); err != ErrIntent {
+			t.Errorf("intent %d: got %v, want ErrIntent", intent, err)
+		}
+	}
+	for _, intent := range []Intent{IntentStatus, IntentLogin, IntentTransfer} {
+		if h, _ := read(t, frame(765, "mc.example.com", 25565, intent)); h.Intent != intent {
+			t.Errorf("intent %d was not accepted", intent)
+		}
+	}
+}
