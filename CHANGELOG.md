@@ -9,6 +9,15 @@
 - `internal/mojang`: ungated name and UUID lookups for the control link, which only
   a key holder can reach, answering "no such player" apart from "Mojang did not
   answer" so a member who mistyped a name is told so rather than told to retry.
+- `proxyd`: a control link, `config.control`, through which the whitelist is
+  managed from outside the process. TCP, one request per connection, every frame
+  sealed with the node's control key and bound to a challenge the node picked for
+  that connection, so a recording replays into nothing; a frame that does not open
+  gets no reply at all. Loopback may always connect, `allow_from` says who else
+  may. `list`, `add` and `remove`; an add given only a name or only a uuid has the
+  other half resolved against Mojang on the node. `proxyd ctl` is the client for an
+  operator on the node, which is how proxyctl will drive it over ssh. proxyd stays
+  the only writer of its file.
 - `proxyd`: config-driven relay node. Handshake rewrite (Forge markers preserved,
   BungeeCord identity stripped), source-IP allowlist, `splice(2)` relay with
   per-direction half-close, legacy `0xFE` ping rejected.

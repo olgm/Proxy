@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/olgm/proxy/internal/mc"
-	"github.com/olgm/proxy/internal/whitelist"
+	"github.com/olgm/proxy/internal/mojang"
 )
 
 const notchUUID = "069a79f4-44e9-4726-a5be-fca90e38aaf5"
@@ -27,11 +27,28 @@ func (s stubMojang) UUIDFor(name, ip string) (string, bool) {
 	return u, ok
 }
 
+func (s stubMojang) LookupName(name string) (string, string, error) {
+	u, ok := s.owners[strings.ToLower(name)]
+	if !ok {
+		return "", "", mojang.ErrNoSuchPlayer
+	}
+	return u, name, nil
+}
+
+func (s stubMojang) LookupUUID(uuid string) (string, error) {
+	for n, u := range s.owners {
+		if u == uuid {
+			return n, nil
+		}
+	}
+	return "", mojang.ErrNoSuchPlayer
+}
+
 // useMojang points the listener constructor at a stub for the duration of a test.
 func useMojang(t *testing.T, owners map[string]string) {
 	t.Helper()
 	prev := newMojang
-	newMojang = func() whitelist.Mojang { return stubMojang{owners} }
+	newMojang = func() mojangAPI { return stubMojang{owners} }
 	t.Cleanup(func() { newMojang = prev })
 }
 

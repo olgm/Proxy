@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/olgm/proxy/internal/control"
 	"github.com/olgm/proxy/internal/mc"
 	"github.com/olgm/proxy/internal/mojang"
 	"github.com/olgm/proxy/internal/tunnel"
@@ -37,6 +38,21 @@ const (
 
 type Config struct {
 	Listeners []Listener `json:"listeners"`
+	// Control is the link through which this node's whitelist is managed from
+	// outside. Only a node with a whitelist has one.
+	Control *Control `json:"control,omitempty"`
+}
+
+// Control is a TCP listener answering whitelist requests from the Discord bot,
+// wherever it runs, and from `proxyd ctl` over ssh. See internal/control.
+type Control struct {
+	Bind string `json:"bind"`
+	// Key seals every frame; the bot's node holds the same one.
+	Key string `json:"key"`
+	// AllowFrom is who may connect besides loopback, which always may: the bot's
+	// node. TCP, so trusting an address is sound here, and the key is on top of
+	// it rather than instead.
+	AllowFrom []string `json:"allow_from,omitempty"`
 }
 
 type Listener struct {
@@ -131,9 +147,10 @@ type Minecraft struct {
 
 type server struct {
 	Listener
-	allow []netip.Prefix
-	wl    *whitelist.List
-	tun   *tunnel.Node
+	allow  []netip.Prefix
+	wl     *whitelist.List
+	mojang mojangAPI // set with wl; the control link resolves names through it
+	tun    *tunnel.Node
 }
 
 // halfCloser is whatever the next leg turns out to be: a TCP connection on a
@@ -146,21 +163,64 @@ type halfCloser interface {
 	Close() error
 }
 
+// mojangAPI is everything the node asks Mojang: the whitelist's refresh and
+// miss-path lookup, and the control link's name resolution.
+type mojangAPI interface {
+	whitelist.Mojang
+	control.Resolver
+}
+
 // newMojang builds the profile-API client backing the whitelist. A seam: tests
 // replace it so they neither reach the network nor depend on Mojang being up.
-var newMojang = func() whitelist.Mojang { return mojang.New() }
+var newMojang = func() mojangAPI { return mojang.New() }
 
 // Run starts every listener and blocks.
 func Run(cfg *Config) error {
-	if len(cfg.Listeners) == 0 {
-		return errors.New("config defines no listeners")
+	n, err := start(cfg)
+	if err != nil {
+		return err
 	}
-	var wg sync.WaitGroup
+	n.wg.Wait()
+	return nil
+}
+
+// node is a running config: its listeners, and the control link if it has one.
+type node struct {
+	wg      sync.WaitGroup
+	lns     []net.Listener
+	servers []*server
+	ctl     net.Listener
+}
+
+func (n *node) close() {
+	for _, ln := range n.lns {
+		ln.Close()
+	}
+	for _, s := range n.servers {
+		if s.tun != nil {
+			s.tun.Close()
+		}
+	}
+	if n.ctl != nil {
+		n.ctl.Close()
+	}
+}
+
+func start(cfg *Config) (*node, error) {
+	if len(cfg.Listeners) == 0 {
+		return nil, errors.New("config defines no listeners")
+	}
+	if cfg.Control != nil && !gated(cfg) {
+		return nil, errors.New("control: this node has no whitelist to manage")
+	}
+	n := &node{}
+	var wg = &n.wg
 	for _, l := range cfg.Listeners {
 		s, err := newServer(l)
 		if err != nil {
-			return err
+			return nil, err
 		}
+		n.servers = append(n.servers, s)
 		mode := l.Role()
 		if s.wl != nil {
 			mode += fmt.Sprintf(" whitelist=%s(%d)", l.Minecraft.Whitelist, s.wl.Len())
@@ -189,15 +249,71 @@ func Run(cfg *Config) error {
 		}
 		ln, err := net.Listen("tcp", l.Bind)
 		if err != nil {
-			return err
+			return nil, err
 		}
+		n.lns = append(n.lns, ln)
 		go func() {
 			defer wg.Done()
 			s.accept(ln)
 		}()
 	}
-	wg.Wait()
-	return nil
+	if cfg.Control != nil {
+		for _, s := range n.servers {
+			if s.wl == nil {
+				continue
+			}
+			ln, err := startControl(cfg.Control, s)
+			if err != nil {
+				return nil, err
+			}
+			n.ctl = ln
+			break
+		}
+	}
+	return n, nil
+}
+
+// gated reports whether any listener holds a whitelist.
+func gated(cfg *Config) bool {
+	for _, l := range cfg.Listeners {
+		if l.Minecraft != nil && l.Minecraft.Whitelist != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// startControl serves the control link over the first whitelisted listener's
+// list. A node has at most one whitelist file, so any further whitelisted
+// listener sees the same edits on its next reload.
+func startControl(c *Control, s *server) (net.Listener, error) {
+	key, err := tunnel.DecodeKey(c.Key)
+	if err != nil {
+		return nil, fmt.Errorf("control: %w", err)
+	}
+	var allow []netip.Prefix
+	for _, a := range c.AllowFrom {
+		p, err := parsePrefix(a)
+		if err != nil {
+			return nil, fmt.Errorf("control: allow_from %q: %w", a, err)
+		}
+		allow = append(allow, p)
+	}
+	srv, err := control.NewServer(s.wl, key, allow, s.mojang)
+	if err != nil {
+		return nil, err
+	}
+	ln, err := net.Listen("tcp", c.Bind)
+	if err != nil {
+		return nil, fmt.Errorf("control: %w", err)
+	}
+	guard := "loopback"
+	if len(c.AllowFrom) > 0 {
+		guard += "," + strings.Join(c.AllowFrom, ",")
+	}
+	log.Printf("control %s whitelist=%s allow=%s", c.Bind, s.Minecraft.Whitelist, guard)
+	go srv.Serve(ln)
+	return ln, nil
 }
 
 // Role is what this listener does, which is not configured anywhere: it follows
@@ -287,11 +403,12 @@ func newServer(l Listener) (*server, error) {
 	if l.Minecraft != nil && l.Minecraft.Whitelist != "" {
 		// Refusing to start beats starting ungated: an unreadable list would
 		// otherwise silently open the chain to everyone.
-		wl, err := whitelist.Open(l.Minecraft.Whitelist, newMojang())
+		m := newMojang()
+		wl, err := whitelist.Open(l.Minecraft.Whitelist, m)
 		if err != nil {
 			return nil, fmt.Errorf("listener %s: whitelist: %w", l.Bind, err)
 		}
-		s.wl = wl
+		s.wl, s.mojang = wl, m
 	}
 	if len(l.Hops) > 0 || len(l.Peers) > 0 {
 		t, err := newTunnel(l)

@@ -69,9 +69,9 @@ func (e *entry) format() string {
 
 // Entry is one player, as the file records them.
 type Entry struct {
-	Name string
-	UUID string
-	Tag  string
+	Name string `json:"name"`
+	UUID string `json:"uuid"`
+	Tag  string `json:"tag,omitempty"`
 }
 
 // ListedError is returned by Add for a UUID already on the list, carrying the line
