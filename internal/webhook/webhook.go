@@ -177,9 +177,18 @@ func redact(err error) string {
 // keeps a reconnect storm inside Discord's rate limit and what makes it
 // readable at the same time.
 type Queue struct {
-	c     *Client
-	in    chan string
-	done  chan struct{}
+	c    *Client
+	in   chan string
+	stop chan struct{}
+	done chan struct{}
+
+	// closed is guarded rather than signalled by closing in, because a node
+	// shutting down closes the feed while sessions are still ending: a send on
+	// a closed channel would take the process down with it, and the whole point
+	// of this queue is that a feed cannot hurt the thing it reports on.
+	mu     sync.RWMutex
+	closed bool
+
 	drops atomic.Int64
 	once  sync.Once
 }
@@ -189,14 +198,24 @@ type Queue struct {
 // blocks a login is worse than a feed with a hole in it. flush is how long lines
 // are gathered before one message goes out.
 func NewQueue(url string, depth int, flush time.Duration) *Queue {
-	q := &Queue{c: New(url), in: make(chan string, depth), done: make(chan struct{})}
+	q := &Queue{
+		c: New(url), in: make(chan string, depth),
+		stop: make(chan struct{}), done: make(chan struct{}),
+	}
 	go q.run(flush)
 	return q
 }
 
-// Send offers one line. It returns immediately whatever the state of the queue.
+// Send offers one line. It returns immediately whatever the state of the queue,
+// including after Close: a session ending during shutdown must not block and
+// must not panic.
 func (q *Queue) Send(line string) {
 	if line == "" {
+		return
+	}
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+	if q.closed {
 		return
 	}
 	select {
@@ -206,9 +225,15 @@ func (q *Queue) Send(line string) {
 	}
 }
 
-// Close flushes what is queued and stops the sender.
+// Close stops accepting lines, flushes what is queued, and waits for the sender
+// to finish. It may be called more than once.
 func (q *Queue) Close() {
-	q.once.Do(func() { close(q.in) })
+	q.once.Do(func() {
+		q.mu.Lock()
+		q.closed = true
+		q.mu.Unlock()
+		close(q.stop)
+	})
 	<-q.done
 }
 
@@ -231,20 +256,32 @@ func (q *Queue) run(flush time.Duration) {
 		}
 		buf, n = buf[:0], 0
 	}
+	take := func(line string) {
+		if n+len(line)+1 > maxContent {
+			send()
+		}
+		buf = append(buf, line)
+		n += len(line) + 1
+	}
 	for {
 		select {
-		case line, ok := <-q.in:
-			if !ok {
-				send()
-				return
-			}
-			if n+len(line)+1 > maxContent {
-				send()
-			}
-			buf = append(buf, line)
-			n += len(line) + 1
+		case line := <-q.in:
+			take(line)
 		case <-t.C:
 			send()
+		case <-q.stop:
+			// Send is shut out by now, so what is in the channel is all there
+			// will ever be. Drain it rather than dropping a logout posted a
+			// moment before the node went down.
+			for {
+				select {
+				case line := <-q.in:
+					take(line)
+				default:
+					send()
+					return
+				}
+			}
 		}
 	}
 }

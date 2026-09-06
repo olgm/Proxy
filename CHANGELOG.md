@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `internal/webhook`: closing a queue no longer races a send. A node shuts its
+  feed down while sessions are still ending, so Close races Send by construction;
+  signalling that by closing the channel turned the race into a send on a closed
+  channel, which would have taken proxyd down with it. A feed must never do that
+  to the thing it reports on. Close now shuts the door under a lock and drains
+  what is left, so a logout posted a moment before shutdown still gets out.
+
 - `proxyctl`: a `feeds` block in `topology.json` turns on Discord feeds, and every
   one of them is off until it is named there. A feed names an *environment
   variable* holding its webhook URL rather than the URL, because a webhook URL is a

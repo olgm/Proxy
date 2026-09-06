@@ -206,3 +206,38 @@ func TestOversizeLineIsTruncated(t *testing.T) {
 		t.Fatalf("sent %d bytes, over the %d limit", n, maxContent)
 	}
 }
+
+// A node shuts its feed down while sessions are still ending, so Close races
+// Send by construction. Closing the channel to signal it would turn that race
+// into "send on closed channel" and take the process down — which is the one
+// thing a feed must never do to the thing it reports on.
+func TestSendDuringCloseIsSafe(t *testing.T) {
+	_, url := newCapture(t)
+	q := NewQueue(url, 8, time.Millisecond)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				q.Send("line")
+			}
+		}()
+	}
+	go q.Close()
+	wg.Wait()
+	q.Close() // idempotent, and the second caller waits like the first
+}
+
+// What was queued a moment before the node went down should still get out.
+func TestCloseFlushesWhatWasQueued(t *testing.T) {
+	c, url := newCapture(t)
+	q := NewQueue(url, 16, time.Hour) // never ticks: only Close can flush this
+	q.Send("last words")
+	q.Close()
+
+	if all := c.sent(); len(all) != 1 || all[0].Content != "last words" {
+		t.Fatalf("close did not flush the queue: %+v", all)
+	}
+}
