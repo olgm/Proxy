@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `internal/webhook`: one Discord webhook client, shared by everything that posts
+  a feed. stdlib only, because proxyd and probed are dependency-free binaries on a
+  node and both post their own; proxybot has discordgo already and uses this anyway,
+  so a feed reads the same wherever it was posted from. A queue coalesces a flush
+  into one message, which is what keeps a reconnect storm inside Discord's rate
+  limit and what makes the channel readable, and drops rather than blocking when it
+  fills — a feed that stalls a login is worse than a feed with a hole in it, and the
+  hole says how big it was. Mentions are never parsed, 429s are waited out, and a
+  webhook URL is a bearer credential so it never reaches an error or a log line.
+
 - `probed`: a measurement service that answers the question `duplicate` exists for.
   Every leg a production path really uses is probed twice — once at a single copy
   and once at the count that leg carries — and the difference between the two is

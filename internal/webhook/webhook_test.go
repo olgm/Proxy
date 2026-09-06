@@ -1,0 +1,208 @@
+package webhook
+
+import (
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+// capture is a stand-in Discord: it records every body posted to it.
+type capture struct {
+	mu     sync.Mutex
+	bodies []payload
+	paths  []string
+	hold   chan struct{} // when non-nil, the first request waits on it
+	status int
+	held   bool
+}
+
+func (c *capture) handler(w http.ResponseWriter, r *http.Request) {
+	b, _ := io.ReadAll(r.Body)
+	var p payload
+	json.Unmarshal(b, &p)
+
+	c.mu.Lock()
+	c.bodies = append(c.bodies, p)
+	c.paths = append(c.paths, r.URL.Path+"?"+r.URL.RawQuery)
+	hold, first := c.hold, !c.held
+	c.held = true
+	status := c.status
+	c.mu.Unlock()
+
+	if hold != nil && first {
+		<-hold
+	}
+	if status != 0 {
+		w.WriteHeader(status)
+		w.Write([]byte(`{}`))
+		return
+	}
+	w.Write([]byte(`{"id":"991"}`))
+}
+
+func (c *capture) sent() []payload {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]payload(nil), c.bodies...)
+}
+
+func newCapture(t *testing.T) (*capture, string) {
+	t.Helper()
+	c := &capture{}
+	srv := httptest.NewServer(http.HandlerFunc(c.handler))
+	t.Cleanup(srv.Close)
+	return c, srv.URL
+}
+
+func TestPostReturnsMessageID(t *testing.T) {
+	c, url := newCapture(t)
+	id, err := New(url).Post("hello")
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if id != "991" {
+		t.Fatalf("id = %q, want 991", id)
+	}
+	sent := c.sent()
+	if len(sent) != 1 || sent[0].Content != "hello" {
+		t.Fatalf("sent %+v", sent)
+	}
+	// The id is only returned when Discord is asked to wait for the message.
+	if !strings.Contains(c.paths[0], "wait=true") {
+		t.Errorf("post did not ask to wait: %s", c.paths[0])
+	}
+}
+
+// A feed is a record. An IGN or a tag that looks like a mention must not ping a
+// channel every time that player logs in.
+func TestPostSuppressesMentions(t *testing.T) {
+	c, url := newCapture(t)
+	if _, err := New(url).Post("@everyone joined"); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	got := c.sent()[0].AllowedMentions.Parse
+	if got == nil || len(got) != 0 {
+		t.Fatalf("allowed_mentions.parse = %#v, want an empty list", got)
+	}
+}
+
+func TestEditTargetsTheMessage(t *testing.T) {
+	c, url := newCapture(t)
+	if err := New(url).Edit("991", "now this"); err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	if !strings.HasSuffix(c.paths[0], "/messages/991?") {
+		t.Fatalf("edit went to %s", c.paths[0])
+	}
+	if c.sent()[0].Content != "now this" {
+		t.Fatalf("sent %+v", c.sent())
+	}
+}
+
+// A roster message somebody deleted is not an error to report and give up on:
+// it is the cue to post a new one.
+func TestEditGoneReportsErrGone(t *testing.T) {
+	c, url := newCapture(t)
+	c.status = http.StatusNotFound
+	if err := New(url).Edit("991", "x"); err != ErrGone {
+		t.Fatalf("err = %v, want ErrGone", err)
+	}
+}
+
+func TestRetriesA429(t *testing.T) {
+	var n int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		if n == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"retry_after":0.01}`))
+			return
+		}
+		w.Write([]byte(`{"id":"1"}`))
+	}))
+	defer srv.Close()
+
+	if _, err := New(srv.URL).Post("x"); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("made %d requests, want 2", n)
+	}
+}
+
+// The URL is the credential. It must not turn up in an error a node will log.
+func TestErrorsDoNotLeakTheURL(t *testing.T) {
+	url := "http://127.0.0.1:1/webhooks/12345/s3cr3t-token"
+	_, err := New(url).Post("x")
+	if err == nil {
+		t.Fatal("want an error from an unreachable webhook")
+	}
+	if strings.Contains(err.Error(), "s3cr3t-token") || strings.Contains(err.Error(), "webhooks/12345") {
+		t.Fatalf("error carries the webhook URL: %v", err)
+	}
+}
+
+// Several logins in one flush are one message, not one message each. That is
+// both what keeps a reconnect storm inside Discord's rate limit and what makes
+// the channel readable.
+func TestQueueCoalesces(t *testing.T) {
+	c, url := newCapture(t)
+	q := NewQueue(url, 16, 10*time.Millisecond)
+	q.Send("one")
+	q.Send("two")
+	q.Send("three")
+	q.Close()
+
+	sent := c.sent()
+	if len(sent) != 1 {
+		t.Fatalf("sent %d messages, want 1: %+v", len(sent), sent)
+	}
+	if sent[0].Content != "one\ntwo\nthree" {
+		t.Fatalf("content = %q", sent[0].Content)
+	}
+}
+
+// A feed that blocks a login is worse than a feed with a hole in it, so a full
+// queue drops — and says so, rather than leaving a silent gap.
+func TestQueueDropsAndSaysSo(t *testing.T) {
+	c, url := newCapture(t)
+	c.hold = make(chan struct{})
+
+	q := NewQueue(url, 2, 5*time.Millisecond)
+	q.Send("first")
+	// Wait for the sender to be inside that first post, holding the channel.
+	for len(c.sent()) == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	for i := 0; i < 20; i++ {
+		q.Send("more")
+	}
+	close(c.hold)
+	q.Close()
+
+	var joined []string
+	for _, p := range c.sent() {
+		joined = append(joined, p.Content)
+	}
+	all := strings.Join(joined, "\n")
+	if !strings.Contains(all, "did not fit") {
+		t.Fatalf("no drop note in %q", all)
+	}
+}
+
+// A single line past Discord's limit is truncated rather than rejected: losing
+// the tail of one logout line is better than losing the line.
+func TestOversizeLineIsTruncated(t *testing.T) {
+	c, url := newCapture(t)
+	if _, err := New(url).Post(strings.Repeat("x", maxContent+500)); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if n := len(c.sent()[0].Content); n > maxContent {
+		t.Fatalf("sent %d bytes, over the %d limit", n, maxContent)
+	}
+}
