@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,12 +30,41 @@ const (
 
 var players = map[string]string{"notch": notchUUID, "alex": alexUUID, "steve": steveUUID}
 
-// stubSessions stands in for a node's live register.
-type stubSessions []control.Live
+// fakeSessions stands in for a node's live register and its session log. Tests
+// set both directly; the point here is what the bot does with the answers.
+type fakeSessions struct {
+	mu   sync.Mutex
+	live []control.Live
+	past []control.Past // newest last, as a log file holds them
+}
 
-func (s stubSessions) Live() []control.Live { return s }
+func (f *fakeSessions) Live() []control.Live {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]control.Live(nil), f.live...)
+}
 
-func (s stubSessions) History([]string, int) ([]control.Past, error) { return nil, nil }
+func (f *fakeSessions) History(uuids []string, limit int) ([]control.Past, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	want := map[string]bool{}
+	for _, u := range uuids {
+		want[bare(u)] = true
+	}
+	var out []control.Past
+	for i := len(f.past) - 1; i >= 0 && len(out) < limit; i-- {
+		if len(want) == 0 || want[bare(f.past[i].UUID)] {
+			out = append(out, f.past[i])
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeSessions) set(live []control.Live, past []control.Past) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.live, f.past = live, past
+}
 
 type fakeMojang struct{}
 
@@ -58,6 +88,7 @@ func (fakeMojang) LookupUUID(uuid string) (string, error) {
 type fakeNode struct {
 	path string
 	ln   net.Listener
+	sess *fakeSessions
 }
 
 func (n *fakeNode) file(t *testing.T) string {
@@ -87,7 +118,8 @@ func startNode(t *testing.T, name string) (botcfg.Entry, *fakeNode) {
 		t.Fatal(err)
 	}
 	key := tunnel.NewKey()
-	s, err := control.NewServer(l, key, nil, fakeMojang{}, stubSessions(nil))
+	sess := &fakeSessions{}
+	s, err := control.NewServer(l, key, nil, fakeMojang{}, sess)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +129,7 @@ func startNode(t *testing.T, name string) (botcfg.Entry, *fakeNode) {
 	}
 	t.Cleanup(func() { ln.Close() })
 	go s.Serve(ln)
-	return botcfg.Entry{Node: name, Addr: ln.Addr().String(), Key: tunnel.EncodeKey(key)}, &fakeNode{path: p, ln: ln}
+	return botcfg.Entry{Node: name, Addr: ln.Addr().String(), Key: tunnel.EncodeKey(key)}, &fakeNode{path: p, ln: ln, sess: sess}
 }
 
 type fakeMembers struct {

@@ -451,6 +451,39 @@ Commands, all replying privately to whoever ran them:
 | `/whitelist list` | anyone: own lines. managers: every line, with owners | |
 | `/whitelist list user:@x` | managers | that member's lines |
 | `/whitelist purge user:@x` | managers | drops every line that member owns |
+| `/watch user:@x` | managers | that member's accounts, open sessions and session history |
+
+`/watch` answers privately, with a page of five finished sessions and a button for
+the next:
+
+```
+**Watching @someone**
+
+**Accounts**
+`Notch` `069a79f4-44e9-4726-a5be-fca90e38aaf5`
+
+**Online now**
+`Notch` on **hk** from `203.0.113.9` · 12m
+
+**Sessions** — page 1
+`Notch` **hk** `203.0.113.9` · 5 Sep 11:00 → 11:42 (42m) · up 4.1MB down 51.7MB wire 111.6MB ×2.00
+```
+
+**This is the one place the client IP is reported**, and why the command is
+managers-only and the reply is always ephemeral. One manager reading a private
+reply is a different audience from a channel, which is why the `sessions` feed
+does not carry it.
+
+Which accounts belong to the member is decided by the tag on their whitelist
+lines, as everywhere else; the sessions are then found by uuid. So `/watch` shows
+the history of the accounts they own **now** — hand an account to somebody else
+and its past sessions follow the account, not the member who used to hold it.
+
+Sessions come from `/var/lib/proxyd/sessions.jsonl`, which every ingress writes as
+a session ends. It holds what the node's journal line already holds. It is bounded
+by size rather than by age — 64 MB with one previous file kept — so on a busy node
+the oldest sessions fall off sooner than on a quiet one. Worth knowing before
+relying on it for anything.
 
 A cap counts the lines tagged with the member's id. Managers have no cap. A name
 nobody holds, a name Mojang could not be asked about, and an account someone else

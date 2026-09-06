@@ -51,6 +51,12 @@ var commands = []*discordgo.ApplicationCommand{{
 			},
 		},
 	},
+}, {
+	Name:        "watch",
+	Description: "Show a member's accounts, open sessions and session history (managers only)",
+	Options: []*discordgo.ApplicationCommandOption{
+		{Type: discordgo.ApplicationCommandOptionUser, Name: "user", Description: "The member", Required: true},
+	},
 }}
 
 // noPings renders mentions without notifying anyone: the audit channel is a
@@ -82,7 +88,7 @@ func run(b *bot, token string) error {
 	if _, err := s.ApplicationCommandBulkOverwrite(s.State.User.ID, b.cfg.Guild, commands); err != nil {
 		return fmt.Errorf("discord: register commands in guild %s: %w", b.cfg.Guild, err)
 	}
-	log.Printf("discord: /whitelist registered in guild %s", b.cfg.Guild)
+	log.Printf("discord: /whitelist and /watch registered in guild %s", b.cfg.Guild)
 
 	go func() {
 		for {
@@ -103,10 +109,21 @@ func run(b *bot, token string) error {
 }
 
 func (b *bot) interaction(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	if i.Type != discordgo.InteractionApplicationCommand || i.Member == nil || i.GuildID != b.cfg.Guild {
+	if i.Member == nil || i.GuildID != b.cfg.Guild {
+		return
+	}
+	if i.Type == discordgo.InteractionMessageComponent {
+		b.page(s, i)
+		return
+	}
+	if i.Type != discordgo.InteractionApplicationCommand {
 		return
 	}
 	data := i.ApplicationCommandData()
+	if data.Name == "watch" {
+		b.watchCommand(s, i, data)
+		return
+	}
 	if data.Name != "whitelist" || len(data.Options) == 0 {
 		return
 	}
@@ -136,6 +153,74 @@ func (b *bot) interaction(s *discordgo.Session, i *discordgo.InteractionCreate) 
 		log.Printf("discord: reply: %v", err)
 	}
 	b.audit(s, r.audit)
+}
+
+// watchCommand answers /watch with the first page. Ephemeral, always: this is
+// the one reply that carries a client IP, and it goes to the one manager who
+// asked for it.
+func (b *bot) watchCommand(s *discordgo.Session, i *discordgo.InteractionCreate, data discordgo.ApplicationCommandInteractionData) {
+	user := ""
+	for _, o := range data.Options {
+		if o.Name == "user" {
+			user = o.UserValue(nil).ID
+		}
+	}
+	ack := &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral},
+	}
+	if err := s.InteractionRespond(i.Interaction, ack); err != nil {
+		log.Printf("discord: ack: %v", err)
+		return
+	}
+	r := b.watch(member{id: i.Member.User.ID, roles: i.Member.Roles}, user, 0)
+	rows := pager(r)
+	edit := &discordgo.WebhookEdit{Content: &r.text, AllowedMentions: noPings, Components: &rows}
+	if _, err := s.InteractionResponseEdit(i.Interaction, edit); err != nil {
+		log.Printf("discord: reply: %v", err)
+	}
+}
+
+// page answers a paging button. The page number came from the button's own id,
+// so nothing was remembered between the press and the message; the role is
+// checked again because a member may have lost it since the first page.
+func (b *bot) page(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	user, page, ok := parseWatchID(i.MessageComponentData().CustomID)
+	if !ok {
+		return
+	}
+	r := b.watch(member{id: i.Member.User.ID, roles: i.Member.Roles}, user, page)
+	resp := &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseUpdateMessage,
+		Data: &discordgo.InteractionResponseData{
+			Content: r.text, Flags: discordgo.MessageFlagsEphemeral,
+			AllowedMentions: noPings, Components: pager(r),
+		},
+	}
+	if err := s.InteractionRespond(i.Interaction, resp); err != nil {
+		log.Printf("discord: page: %v", err)
+	}
+}
+
+// pager is the row of buttons under a watch page, or nothing when there is only
+// one page to show.
+func pager(r watchResult) []discordgo.MessageComponent {
+	var row discordgo.ActionsRow
+	if r.page > 0 {
+		row.Components = append(row.Components, discordgo.Button{
+			Label: "Previous", Style: discordgo.SecondaryButton, CustomID: watchID(r.user, r.page-1),
+		})
+	}
+	if r.more {
+		row.Components = append(row.Components, discordgo.Button{
+			Label: "Next", Style: discordgo.SecondaryButton, CustomID: watchID(r.user, r.page+1),
+		})
+	}
+	if len(row.Components) == 0 {
+		// An empty slice, not nil: nil leaves the buttons from the page before.
+		return []discordgo.MessageComponent{}
+	}
+	return []discordgo.MessageComponent{row}
 }
 
 func (b *bot) audit(s *discordgo.Session, line string) {

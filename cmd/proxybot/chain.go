@@ -132,6 +132,35 @@ func (ch *chain) sessions() []nodeLive {
 	return out
 }
 
+// nodePast is one entry's answer to the history op.
+type nodePast struct {
+	node string
+	past []control.Past
+	err  error
+}
+
+// history asks every entry for the newest n sessions belonging to any of uuids.
+// Every node is asked for the whole page rather than a share of it: no node can
+// page a total order it only holds part of, so the merge does the paging.
+func (ch *chain) history(uuids []string, n int) []nodePast {
+	es := ch.entries()
+	out := make([]nodePast, len(es))
+	var wg sync.WaitGroup
+	for i, e := range es {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			past, err := e.c.History(uuids, n)
+			for j := range past {
+				past[j].Node = e.node // only this side knows which node it asked
+			}
+			out[i] = nodePast{node: e.node, past: past, err: err}
+		}()
+	}
+	wg.Wait()
+	return out
+}
+
 // list is the primary's list, which is the one that counts.
 func (ch *chain) list() ([]control.Entry, error) {
 	return ch.primary.c.List()

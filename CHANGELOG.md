@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- `proxybot`: `/watch user:@x`, managers only and always private. It shows the
+  accounts that member owns, the sessions they have open and on which entry, and a
+  page of five finished sessions with a button for the next — each with the IGN,
+  uuid, originating IP, how long it lasted and what it carried, payload and wire.
+  This is the one place the client IP is reported, which is why it is
+  managers-only and ephemeral: one manager reading a private reply is not the
+  audience a channel feed is. Ownership is the whitelist tag as everywhere else and
+  sessions are then matched by uuid, so the history follows the account rather than
+  whoever used to hold it. The page number rides in the button's own id, so the bot
+  remembers nothing between one press and the next, and the role is checked again
+  on every press.
+
 - `internal/jsonl`: the rotating record file, moved out of `internal/probe` so
   proxyd's session log and probed's dataset are one implementation rather than two.
   It also reads back now: `Tail` returns the newest records matching a filter,
