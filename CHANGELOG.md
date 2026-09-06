@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- `probed`: a probe feed. When a window closes, the node that measured it posts one
+  line per class — the same leg at one copy and at the count it really carries, in
+  the same window, which is the comparison the whole service exists to make. The
+  direction split is absent rather than zero on the first window of a series, for
+  the same reason it is null in the dataset. `feeds.probe.windows` picks which
+  windows reach the channel and changes nothing about what is measured or logged;
+  the default is the longest configured, the only one whose p99 means anything.
+  A node that only answers originates nothing, so Chicago is never given the URL.
+  This widens what probed talks to — its peers, and now a webhook — and nothing
+  about the rule against touching the backend changes.
+
 - `proxyd`: a session feed. One line to a Discord webhook when a player logs in and
   one when they log out, carrying the IGN, the UUID, the entry they arrived at, and
   what the session cost — payload each way, and what the tunnel spent carrying it.

@@ -250,6 +250,9 @@ func expandProbe(t *Topology, next int) (map[string]*probe.Config, []check, int,
 			Name: node, Links: linksFor(node).cfg, Classes: cl,
 			Hz: p.Hz, Windows: p.Windows, TimeoutMS: p.TimeoutMS,
 			MaxLogMB: p.MaxLogMB, Log: probeLogPath,
+			// Only what was asked for: probed applies the same default this
+			// prints, so the two cannot say different things.
+			FeedWindows: feedWindows(t),
 		}
 		if port, ok := pt.port[node]; ok {
 			c.Bind = bindAddr(t.Nodes[node].BindAddr, port)
@@ -305,6 +308,15 @@ func nodesOf(g *graph, entry string) map[string]bool {
 	}
 	walk(entry)
 	return out
+}
+
+// feedWindows is the explicit filter, or nothing. The default lives in
+// internal/probe so that probed and this agree by construction.
+func feedWindows(t *Topology) []string {
+	if t.Feeds == nil || t.Feeds.Probe == nil {
+		return nil
+	}
+	return t.Feeds.Probe.Windows
 }
 
 func printProbe(t *Topology, cfgs map[string]*probe.Config) {

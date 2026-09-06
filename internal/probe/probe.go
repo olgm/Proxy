@@ -25,6 +25,7 @@ type Node struct {
 	classes map[uint8]*class
 	socks   []*socket
 	w       *writer
+	feed    *feed
 
 	stop     chan struct{}
 	stopOnce sync.Once
@@ -123,7 +124,12 @@ func New(cfg Config) (*Node, error) {
 		return nil, err
 	}
 
+	fd, err := newFeed(cfg)
+	if err != nil {
+		return nil, err
+	}
 	n := &Node{
+		feed:     fd,
 		cfg:      cfg,
 		interval: time.Duration(float64(time.Second) / cfg.Hz),
 		timeout:  time.Duration(cfg.TimeoutMS) * time.Millisecond,
@@ -257,6 +263,7 @@ func (n *Node) Close() {
 	if n.w != nil {
 		n.w.Close()
 	}
+	n.feed.Close()
 }
 
 func (n *Node) stopped() bool {
@@ -394,6 +401,7 @@ func (c *class) flush(now time.Time) {
 		_, _, rt := r.Loss()
 		log.Printf("%s: probe %s dup=%d w=%s rtt=%.1fms mdev=%.1fms loss=%.1f%% n=%d",
 			c.n.cfg.Name, r.Class, r.Dup, dur(r.Window), r.P50, r.Mdev, rt, r.N)
+		c.n.feed.post(r)
 	}
 }
 

@@ -36,6 +36,7 @@
     "windows": ["1m", "10m"]
   },
   "feeds": {
-    "sessions": {"webhook_env": "DISCORD_SESSIONS_WEBHOOK"}
+    "sessions": {"webhook_env": "DISCORD_SESSIONS_WEBHOOK"},
+    "probe":    {"webhook_env": "DISCORD_PROBE_WEBHOOK", "windows": ["10m"]}
   }
 }

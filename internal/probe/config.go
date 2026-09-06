@@ -52,6 +52,12 @@ type Config struct {
 	// a chain that was dropping nothing.
 	TimeoutMS int `json:"timeout_ms,omitempty"`
 
+	// FeedWindows are the windows whose reports also go to the Discord webhook,
+	// when one is configured. It never changes what is measured or what is
+	// logged: the dataset keeps every window either way. Empty means the longest
+	// window configured, which is the only one whose p99 means anything.
+	FeedWindows []string `json:"feed_windows,omitempty"`
+
 	Log string `json:"log,omitempty"`
 	// MaxLogMB rotates the log at this size, keeping one previous file. Disk is
 	// therefore bounded at twice this and never grows without limit.

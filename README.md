@@ -498,6 +498,7 @@ Who posts a feed is not a setting, because it follows from who can see it:
 | feed | posted by | on |
 | --- | --- | --- |
 | `sessions` | `proxyd` | every ingress, about its own node only |
+| `probe` | `probed` | every node that originates a class |
 
 ### sessions
 
@@ -517,7 +518,7 @@ counting every duplicate and re-send, with the multiple beside it. It is absent 
 a TCP route, which has no copies to count. `name` and `uuid` come from Login Start,
 so they are the client's own word — see "What it does not do".
 
-**The client IP is deliberately not here.** It is in the node's journal, where an
+**The client IP is deliberately not here.**  It is in the node's journal, where an
 operator who has the node already has it. A channel is a wider audience than that,
 and a login feed already tells its readers which entries are live, so point it at
 a channel you would not hand the entry addresses to.
@@ -526,6 +527,34 @@ A burst of reconnects arrives as one message rather than fifty: lines are gather
 for a couple of seconds and posted together. If more arrive than the queue holds,
 the feed says how many it dropped rather than blocking the login — a feed that
 stalls a session is worse than a feed with a hole in it.
+
+### probe
+
+One line per class when a window closes, from the node that measured it:
+
+```
+**hk** `hk>ty` leg ×1 · 10m · p50 44.1ms p90 44.4ms p99 45.9ms mdev 0.31 · loss 0.00% (out 0.00 back 0.00) · n 600
+**hk** `hk>ty` leg ×2 · 10m · p50 44.0ms p90 44.2ms p99 44.8ms mdev 0.28 · loss 0.00% (out 0.00 back 0.00) · n 600
+```
+
+Those two lines are the measurement the tool exists to make: the same leg at one
+copy and at the count it really carries, in the same window. `out` and `back`
+split the loss into the direction that dropped it, and are absent rather than
+zero on the first window of a series — the count that arrived is the difference
+of two counters, and the earlier one comes from the window before.
+
+`windows` picks which of the `probe` windows reach the channel; it changes
+nothing about what is measured or logged, and the dataset keeps every window
+either way. The default is the longest one configured, which is the only one
+whose p99 has enough samples behind it to mean anything. Without a filter the
+four classes Hong Kong originates would post eight messages a minute.
+
+Only a node that originates a class posts. Chicago answers everything and
+measures nothing, so it is never given the URL.
+
+This is the one change that widens what `probed` talks to. It reaches its own
+peers, and now a webhook. It still never touches the backend, and the hard rule
+in `agents/operational-safety.md` is unchanged.
 
 ## Firewall
 

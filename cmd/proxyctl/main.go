@@ -19,7 +19,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/olgm/proxy/internal/botcfg"
 	"github.com/olgm/proxy/internal/probe"
@@ -551,7 +550,7 @@ func (t *Topology) checkFeeds() error {
 // exactly when its variable is unset and there is nothing else to check.
 const (
 	envSessionsWebhook = proxy.EnvSessionsWebhook
-	envProbeWebhook    = "PROBED_PROBE_WEBHOOK"
+	envProbeWebhook    = probe.EnvProbeWebhook
 	envOnlineWebhook   = "PROXYBOT_ONLINE_WEBHOOK"
 	envStatusWebhook   = "PROXYBOT_STATUS_WEBHOOK"
 )
@@ -1056,20 +1055,7 @@ func (t *Topology) probeFeedWindows() []string {
 	if t.Feeds == nil || t.Feeds.Probe == nil {
 		return nil
 	}
-	if len(t.Feeds.Probe.Windows) > 0 {
-		return t.Feeds.Probe.Windows
-	}
-	longest, d := "", time.Duration(0)
-	for _, w := range t.Probe.Windows {
-		p, err := time.ParseDuration(w)
-		if err == nil && p > d {
-			longest, d = w, p
-		}
-	}
-	if longest == "" {
-		return nil
-	}
-	return []string{longest}
+	return probe.FeedWindows(t.Probe.Windows, t.Feeds.Probe.Windows)
 }
 
 // onlineOrder is the order entry nodes appear in the roster: those named, then
