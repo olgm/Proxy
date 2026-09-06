@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `internal/sealed`: the sealed request/reply exchange — a challenge, then one AEAD
+  frame each way — moved out of `internal/control` unchanged, so probed's health
+  link can put the same bytes on the wire rather than an approximation of them. No
+  behaviour change; the same reasoning as exporting the tunnel's sealer for probed.
+
 - `proxybot`: an online roster — one message kept up to date in place, grouped by
   the entry each player arrived at and in the order `feeds.online.nodes` asks for,
   with anything unnamed falling to the end so a new entry appears rather than

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/olgm/proxy/internal/mojang"
+	"github.com/olgm/proxy/internal/sealed"
 	"github.com/olgm/proxy/internal/tunnel"
 	"github.com/olgm/proxy/internal/whitelist"
 )
@@ -245,20 +246,20 @@ func exchange(t *testing.T, addr string, frame []byte) ([]byte, []byte, error) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	chal := make([]byte, challengeLen)
+	chal := make([]byte, sealed.ChallengeLen)
 	if _, err := io.ReadFull(conn, chal); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeFrame(conn, frame); err != nil {
+	if err := sealed.WriteFrame(conn, frame); err != nil {
 		t.Fatal(err)
 	}
-	rep, err := readFrame(conn)
+	rep, err := sealed.ReadFrame(conn)
 	return chal, rep, err
 }
 
 func TestReplayIsRefused(t *testing.T) {
 	c, p := serve(t, "", nil)
-	s, _ := newSealer(c.Key)
+	s, _ := sealed.NewSealer(c.Key)
 	req, _ := json.Marshal(Request{Op: "add", Name: "Notch", UUID: notchUUID})
 
 	// A frame has to be sealed against the challenge of the connection it is sent
@@ -267,15 +268,15 @@ func TestReplayIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	chal := make([]byte, challengeLen)
+	chal := make([]byte, sealed.ChallengeLen)
 	if _, err := io.ReadFull(conn, chal); err != nil {
 		t.Fatal(err)
 	}
-	frame := s.seal(req, aad(chal, dirRequest))
-	if err := writeFrame(conn, frame); err != nil {
+	frame := s.Seal(req, sealed.AAD(chal, sealed.DirRequest))
+	if err := sealed.WriteFrame(conn, frame); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readFrame(conn); err != nil {
+	if _, err := sealed.ReadFrame(conn); err != nil {
 		t.Fatalf("first send: %v", err)
 	}
 	conn.Close()
@@ -297,11 +298,11 @@ func TestReplayIsRefused(t *testing.T) {
 
 func TestReplyCannotBeReplayedAsRequest(t *testing.T) {
 	c, _ := serve(t, "", nil)
-	s, _ := newSealer(c.Key)
-	chal := make([]byte, challengeLen)
+	s, _ := sealed.NewSealer(c.Key)
+	chal := make([]byte, sealed.ChallengeLen)
 	// A frame sealed as a reply, even for the right challenge, is not a request.
 	body, _ := json.Marshal(Request{Op: "list"})
-	if _, err := s.open(s.seal(body, aad(chal, dirReply)), aad(chal, dirRequest)); err == nil {
+	if _, err := s.Open(s.Seal(body, sealed.AAD(chal, sealed.DirReply)), sealed.AAD(chal, sealed.DirRequest)); err == nil {
 		t.Fatal("direction is not part of what is authenticated")
 	}
 }

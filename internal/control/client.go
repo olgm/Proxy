@@ -8,6 +8,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/olgm/proxy/internal/sealed"
 	"github.com/olgm/proxy/internal/whitelist"
 )
 
@@ -23,7 +24,7 @@ type Client struct {
 // unreachable, wrong key, malformed; a request the node refused comes back as a
 // Reply with OK false and the reason in Error.
 func (c *Client) Do(req Request) (Reply, error) {
-	s, err := newSealer(c.Key)
+	s, err := sealed.NewSealer(c.Key)
 	if err != nil {
 		return Reply{}, err
 	}
@@ -34,7 +35,7 @@ func (c *Client) Do(req Request) (Reply, error) {
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(exchangeTimeout))
 
-	chal := make([]byte, challengeLen)
+	chal := make([]byte, sealed.ChallengeLen)
 	if _, err := io.ReadFull(conn, chal); err != nil {
 		return Reply{}, fmt.Errorf("control: %s: no challenge: %w", c.Addr, err)
 	}
@@ -42,10 +43,10 @@ func (c *Client) Do(req Request) (Reply, error) {
 	if err != nil {
 		return Reply{}, err
 	}
-	if err := writeFrame(conn, s.seal(b, aad(chal, dirRequest))); err != nil {
+	if err := sealed.WriteFrame(conn, s.Seal(b, sealed.AAD(chal, sealed.DirRequest))); err != nil {
 		return Reply{}, fmt.Errorf("control: %s: %w", c.Addr, err)
 	}
-	wire, err := readFrame(conn)
+	wire, err := sealed.ReadFrame(conn)
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		// The node closes without a word on a frame it cannot open.
 		return Reply{}, fmt.Errorf("control: %s: no reply; wrong key?", c.Addr)
@@ -53,7 +54,7 @@ func (c *Client) Do(req Request) (Reply, error) {
 	if err != nil {
 		return Reply{}, fmt.Errorf("control: %s: %w", c.Addr, err)
 	}
-	plain, err := s.open(wire, aad(chal, dirReply))
+	plain, err := s.Open(wire, sealed.AAD(chal, sealed.DirReply))
 	if err != nil {
 		return Reply{}, fmt.Errorf("control: %s: reply does not open: %w", c.Addr, err)
 	}

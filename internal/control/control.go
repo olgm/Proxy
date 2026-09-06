@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/olgm/proxy/internal/mojang"
+	"github.com/olgm/proxy/internal/sealed"
 	"github.com/olgm/proxy/internal/whitelist"
 )
 
@@ -98,14 +99,14 @@ type Server struct {
 	mojang Resolver // nil: an add has to carry both name and uuid
 	live   Sessions // nil: this node cannot answer the sessions op
 	allow  []netip.Prefix
-	seal   *sealer
+	seal   *sealed.Sealer
 }
 
 // NewServer prepares a server. Loopback may always connect; allow is who else
 // may, which is the bot's node. That is a TCP address, so trusting it is sound in
 // a way it would not be over UDP, and the key is on top of it, not instead.
 func NewServer(list *whitelist.List, key []byte, allow []netip.Prefix, r Resolver, live Sessions) (*Server, error) {
-	s, err := newSealer(key)
+	s, err := sealed.NewSealer(key)
 	if err != nil {
 		return nil, err
 	}
@@ -136,12 +137,12 @@ func (s *Server) handle(c net.Conn) {
 	}
 	c.SetDeadline(time.Now().Add(exchangeTimeout))
 
-	chal := make([]byte, challengeLen)
+	chal := make([]byte, sealed.ChallengeLen)
 	rand.Read(chal)
 	if _, err := c.Write(chal); err != nil {
 		return
 	}
-	wire, err := readFrame(c)
+	wire, err := sealed.ReadFrame(c)
 	if err != nil {
 		log.Printf("control: %s: %v", c.RemoteAddr(), err)
 		return
@@ -149,7 +150,7 @@ func (s *Server) handle(c net.Conn) {
 	// A frame that does not open was sealed with another key, or for another
 	// connection. Either way it gets nothing back, not even a refusal: a reply
 	// would tell a guesser that something is listening for this shape of request.
-	plain, err := s.seal.open(wire, aad(chal, dirRequest))
+	plain, err := s.seal.Open(wire, sealed.AAD(chal, sealed.DirRequest))
 	if err != nil {
 		log.Printf("control: %s: refused: %v", c.RemoteAddr(), err)
 		return
@@ -167,7 +168,7 @@ func (s *Server) handle(c net.Conn) {
 	if err != nil {
 		return
 	}
-	writeFrame(c, s.seal.seal(b, aad(chal, dirReply)))
+	sealed.WriteFrame(c, s.seal.Seal(b, sealed.AAD(chal, sealed.DirReply)))
 }
 
 func (s *Server) allowed(a net.Addr) bool {
