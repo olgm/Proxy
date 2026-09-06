@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `proxybot`: an online roster — one message kept up to date in place, grouped by
+  the entry each player arrived at and in the order `feeds.online.nodes` asks for,
+  with anything unnamed falling to the end so a new entry appears rather than
+  disappearing. An entry that could not be reached reads `unreachable` rather than
+  as empty, and is never counted as nobody. The message is edited only when the
+  roster changed, so the timestamp says *changed* rather than *checked*: a roster
+  that has not moved is still a correct one. The bot now keeps one thing between
+  restarts, the id of that message, in `/var/lib/proxybot/feeds.json`; it is not a
+  source of truth for anything and losing it costs one duplicate message.
+
 - `proxyd`: a register of sessions in progress, and a `sessions` op on the control
   link that reports it. It belongs to the node rather than to a listener, because a
   node may hold several ingresses and "who is online here" is one answer across all

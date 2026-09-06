@@ -551,8 +551,8 @@ func (t *Topology) checkFeeds() error {
 const (
 	envSessionsWebhook = proxy.EnvSessionsWebhook
 	envProbeWebhook    = probe.EnvProbeWebhook
-	envOnlineWebhook   = "PROXYBOT_ONLINE_WEBHOOK"
-	envStatusWebhook   = "PROXYBOT_STATUS_WEBHOOK"
+	envOnlineWebhook   = botcfg.EnvOnlineWebhook
+	envStatusWebhook   = botcfg.EnvStatusWebhook
 )
 
 // feedEnv renders the env file for one service: the variables it should hold,
@@ -700,6 +700,7 @@ func botConfig(t *Topology, cfgs map[string]*proxy.Config) *botcfg.Config {
 		Roles:        t.Discord.Roles,
 		AuditChannel: t.Discord.AuditChannel,
 		Primary:      t.primary(),
+		OnlineNodes:  t.onlineOrder(),
 	}
 	for _, name := range t.whitelistedEntries() {
 		c := cfgs[name].Control
@@ -1425,6 +1426,7 @@ EnvironmentFile=-/etc/proxyd/bot-feeds.env
 ExecStart=/usr/local/bin/proxybot -c /etc/proxyd/bot.json
 Restart=always
 RestartSec=5
+StateDirectory=proxybot
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

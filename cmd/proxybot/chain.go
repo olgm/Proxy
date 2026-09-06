@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 
 	"github.com/olgm/proxy/internal/botcfg"
 	"github.com/olgm/proxy/internal/control"
@@ -95,6 +96,40 @@ func (ch *chain) remove(uuid string) (result, error) {
 		res.lagging = append(res.lagging, o.node)
 	}
 	return res, nil
+}
+
+// nodeLive is one entry's answer to the sessions op. A node that could not be
+// asked carries the error rather than an empty list: "nobody is online here" and
+// "I could not reach it" are different facts and a roster that merged them would
+// drop a node without saying so.
+type nodeLive struct {
+	node string
+	live []control.Live
+	err  error
+}
+
+// entries is every entry the bot manages, primary first.
+func (ch *chain) entries() []entry {
+	return append([]entry{ch.primary}, ch.others...)
+}
+
+// sessions asks every entry who it is relaying. Every entry is asked even when
+// one of them fails: a single unreachable node must not cost the roster the
+// other three.
+func (ch *chain) sessions() []nodeLive {
+	es := ch.entries()
+	out := make([]nodeLive, len(es))
+	var wg sync.WaitGroup
+	for i, e := range es {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			live, err := e.c.Sessions()
+			out[i] = nodeLive{node: e.node, live: live, err: err}
+		}()
+	}
+	wg.Wait()
+	return out
 }
 
 // list is the primary's list, which is the one that counts.

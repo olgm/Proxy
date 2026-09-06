@@ -8,6 +8,14 @@ import (
 	"os"
 )
 
+// Fixed names the bot reads its webhook URLs from. proxyctl writes them into the
+// node's env file from whatever variables topology.json named, so a feed is off
+// exactly when its variable is unset.
+const (
+	EnvOnlineWebhook = "PROXYBOT_ONLINE_WEBHOOK"
+	EnvStatusWebhook = "PROXYBOT_STATUS_WEBHOOK"
+)
+
 type Config struct {
 	Guild string `json:"guild"`
 	// Roles maps a Discord role id to what it grants. A member with none of
@@ -19,6 +27,10 @@ type Config struct {
 	// level with.
 	Primary string  `json:"primary"`
 	Entries []Entry `json:"entries"`
+	// OnlineNodes is the order entries appear in the roster. Anything not named
+	// falls to the end in Entries order, so an entry added later shows up rather
+	// than disappearing.
+	OnlineNodes []string `json:"online_nodes,omitempty"`
 }
 
 // Entry is one whitelisted entry node's control link, with the key it holds.

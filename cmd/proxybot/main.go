@@ -34,6 +34,7 @@ func main() {
 		log.Fatalf("%v", err)
 	}
 	b := &bot{cfg: cfg, chain: ch, adds: newLimiter(5, time.Minute)}
+	b.roster = newRoster(ch, cfg.OnlineNodes, statePath)
 	if err := run(b, token); err != nil {
 		log.Fatalf("%v", err)
 	}

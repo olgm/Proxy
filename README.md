@@ -499,6 +499,7 @@ Who posts a feed is not a setting, because it follows from who can see it:
 | --- | --- | --- |
 | `sessions` | `proxyd` | every ingress, about its own node only |
 | `probe` | `probed` | every node that originates a class |
+| `online` | `proxybot` | one message, edited in place, across every entry |
 
 ### sessions
 
@@ -555,6 +556,40 @@ measures nothing, so it is never given the URL.
 This is the one change that widens what `probed` talks to. It reaches its own
 peers, and now a webhook. It still never touches the backend, and the hard rule
 in `agents/operational-safety.md` is unchanged.
+
+### online
+
+One message the bot keeps up to date, grouped by the entry each player arrived
+at:
+
+```
+**Online — 4**
+
+**au** `jeb_` 1h30m
+**hk** `Notch` 12m · `Herobrine` 3m
+**ty** `Dinnerbone` 22m
+
+_changed <t:1757087460:R>_
+```
+
+`nodes` sets the order the entries appear in; anything not named falls to the end,
+so an entry added later shows up rather than disappearing. An entry with nobody on
+takes no line, and one that could not be reached says `unreachable` — that is not
+the same fact as nobody being online there, and the count in the header never
+includes it.
+
+The message is edited rather than reposted, and only when the roster actually
+changed. That is why the timestamp says *changed* and not *checked*: a roster that
+has not moved in an hour is still a correct one, and Discord counts the relative
+timestamp up on its own without anything being edited.
+
+Only the bot can build this. A node knows its own sessions and no others, so it
+asks all four over their control links and joins the answers.
+
+To do that it keeps one thing between restarts — the id of the message — in
+`/var/lib/proxybot/feeds.json`. It is not a source of truth for anything: losing
+it costs one duplicate message, and the whitelist files remain the only state that
+matters.
 
 ## Firewall
 

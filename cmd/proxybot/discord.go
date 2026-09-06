@@ -93,6 +93,7 @@ func run(b *bot, token string) error {
 			time.Sleep(reconcileEvery)
 		}
 	}()
+	go b.roster.run()
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
