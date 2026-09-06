@@ -550,7 +550,7 @@ func (t *Topology) checkFeeds() error {
 // own; this is what it is called once it reaches the node, so a feed is off
 // exactly when its variable is unset and there is nothing else to check.
 const (
-	envSessionsWebhook = "PROXYD_SESSIONS_WEBHOOK"
+	envSessionsWebhook = proxy.EnvSessionsWebhook
 	envProbeWebhook    = "PROBED_PROBE_WEBHOOK"
 	envOnlineWebhook   = "PROXYBOT_ONLINE_WEBHOOK"
 	envStatusWebhook   = "PROXYBOT_STATUS_WEBHOOK"
@@ -959,7 +959,9 @@ func entryCheck(node Node, name string, port int) check {
 
 func add(cfgs map[string]*proxy.Config, name string, l proxy.Listener) {
 	if cfgs[name] == nil {
-		cfgs[name] = &proxy.Config{}
+		// The node's own name, which it needs only so the session feed can say
+		// which entry a player arrived at.
+		cfgs[name] = &proxy.Config{Name: name}
 	}
 	cfgs[name].Listeners = append(cfgs[name].Listeners, l)
 }

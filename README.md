@@ -69,6 +69,8 @@ needs one more thing before `deploy`; see "Discord bot" below.
 | `discord.guild` | the server's id |
 | `discord.roles.<id>` | what a role grants: `{"accounts": N}` or `{"manage": true}` |
 | `discord.audit_channel` | optional; channel that gets one line per change |
+| `feeds` | optional; posts what the chain is doing to Discord — see below |
+| `feeds.<name>.webhook_env` | environment variable holding that feed's webhook URL |
 
 Hop ports are allocated automatically, and so is one control port per entry with a
 whitelist. `config` prints the map.
@@ -467,6 +469,63 @@ authentication, the entry address is still something to hand out narrowly until 
 ingress rate limit exists, and the bot never prints that address. Anyone with Manage
 Roles in the server can hand out a listed role, which is Discord's trust model, not
 ours.
+
+## Feeds
+
+A `feeds` block posts what the chain is doing to Discord webhooks. Every feed is
+off until it is named there, and the chain is unchanged without one.
+
+```json
+"feeds": {
+  "sessions": {"webhook_env": "DISCORD_SESSIONS_WEBHOOK"}
+}
+```
+
+A feed names an **environment variable**, not a URL. A webhook URL is a bearer
+credential — anyone holding it can post into that channel — and `topology.json`
+is the file you edit and paste at people. Put the URL in `.env` beside the bot
+token, `set -a; . ./.env; set +a`, and deploy. It travels inside the install
+script over ssh stdin into a root-owned env file the unit reads, so it is never
+on a command line and never in `/tmp`. Two feeds naming the same variable land in
+the same channel; that is how you keep one channel or four.
+
+`proxyctl config` lists which feeds are on and which nodes post them, and never
+prints a URL. Deleting a feed removes the file on the next deploy, so turning one
+off turns it off.
+
+Who posts a feed is not a setting, because it follows from who can see it:
+
+| feed | posted by | on |
+| --- | --- | --- |
+| `sessions` | `proxyd` | every ingress, about its own node only |
+
+### sessions
+
+One line when a player logs in and one when they log out:
+
+```
+**hk** `Notch` joined `069a79f4-44e9-4726-a5be-fca90e38aaf5` · online 2
+**hk** `Notch` left · 42m18s · up 4.1MB down 51.7MB wire 111.6MB ×2.00 · online 1
+```
+
+`online` is that node's own count, not the fleet's. A node knows its own sessions
+and no others — nothing crosses between nodes but keyed links, and a login is not
+worth one.
+
+`up` and `down` are payload; `wire` is what carrying it cost on the tunnel's legs,
+counting every duplicate and re-send, with the multiple beside it. It is absent on
+a TCP route, which has no copies to count. `name` and `uuid` come from Login Start,
+so they are the client's own word — see "What it does not do".
+
+**The client IP is deliberately not here.** It is in the node's journal, where an
+operator who has the node already has it. A channel is a wider audience than that,
+and a login feed already tells its readers which entries are live, so point it at
+a channel you would not hand the entry addresses to.
+
+A burst of reconnects arrives as one message rather than fifty: lines are gathered
+for a couple of seconds and posted together. If more arrive than the queue holds,
+the feed says how many it dropped rather than blocking the login — a feed that
+stalls a session is worse than a feed with a hole in it.
 
 ## Firewall
 

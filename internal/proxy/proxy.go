@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -43,6 +44,9 @@ const (
 )
 
 type Config struct {
+	// Name is this node's name in the topology. It is what the session feed
+	// says a player arrived at, and the only reason the node needs to know it.
+	Name      string     `json:"name,omitempty"`
 	Listeners []Listener `json:"listeners"`
 	// Control is the link through which this node's whitelist is managed from
 	// outside. Only a node with a whitelist has one.
@@ -165,6 +169,10 @@ type server struct {
 	// online is the count of logins currently being relayed, which is the number
 	// the MOTD reports and the only live state this node keeps about a session.
 	online atomic.Int64
+	// node and feed are the session feed: what this node is called, and where a
+	// login and a logout are posted. feed is nil unless one was configured.
+	node string
+	feed *sessionFeed
 }
 
 // halfCloser is whatever the next leg turns out to be: a TCP connection on a
@@ -204,6 +212,7 @@ type node struct {
 	lns     []net.Listener
 	servers []*server
 	ctl     net.Listener
+	feed    *sessionFeed
 }
 
 func (n *node) close() {
@@ -218,6 +227,8 @@ func (n *node) close() {
 	if n.ctl != nil {
 		n.ctl.Close()
 	}
+	// Last: a logout posted as the node goes down should still get out.
+	n.feed.Close()
 }
 
 func start(cfg *Config) (*node, error) {
@@ -227,13 +238,17 @@ func start(cfg *Config) (*node, error) {
 	if cfg.Control != nil && !gated(cfg) {
 		return nil, errors.New("control: this node has no whitelist to manage")
 	}
-	n := &node{}
+	// One feed for the node, shared by every ingress on it. Off unless the
+	// environment holds a URL, which is how an operator turns it on.
+	feed := newSessionFeed(os.Getenv(EnvSessionsWebhook))
+	n := &node{feed: feed}
 	var wg = &n.wg
 	for _, l := range cfg.Listeners {
 		s, err := newServer(l)
 		if err != nil {
 			return nil, err
 		}
+		s.node, s.feed = cfg.Name, feed
 		n.servers = append(n.servers, s)
 		mode := l.Role()
 		if s.wl != nil {
@@ -662,15 +677,22 @@ func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake) {
 		}
 	}
 
-	start := time.Now()
-	online := s.online.Add(1)
-	log.Printf("%s: login %s name=%q uuid=%q proto=%d online=%d", s.Bind, ip, name, uuid, h.ProtocolVersion, online)
+	sess := Session{
+		Node: s.node, IP: ip, Name: name, UUID: uuid,
+		Proto: int(h.ProtocolVersion), Start: time.Now(),
+	}
+	sess.Online = s.online.Add(1)
+	log.Printf("%s: login %s name=%q uuid=%q proto=%d online=%d", s.Bind, ip, name, uuid, h.ProtocolVersion, sess.Online)
+	s.feed.login(sess)
 
 	up, down := relay(c, u)
 
+	sess.End, sess.Up, sess.Down, sess.Wire = time.Now(), up, down, wireOf(u)
+	sess.Online = s.online.Add(-1)
 	log.Printf("%s: logout %s name=%q uuid=%q for %s up=%s down=%s%s online=%d",
-		s.Bind, ip, name, uuid, time.Since(start).Round(time.Second),
-		size(up), size(down), wireCost(u, up+down), s.online.Add(-1))
+		s.Bind, ip, name, uuid, sess.For(),
+		size(up), size(down), wireCost(u, up+down), sess.Online)
+	s.feed.logout(sess)
 }
 
 // wireCost reports what the tunnel actually spent carrying a session, and how much

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `proxyd`: a session feed. One line to a Discord webhook when a player logs in and
+  one when they log out, carrying the IGN, the UUID, the entry they arrived at, and
+  what the session cost — payload each way, and what the tunnel spent carrying it.
+  The count beside it is that node's own: a node knows its own sessions and no
+  others, and a login is not worth a keyed link between nodes to change that. The
+  client IP is deliberately absent, because the journal already has it for anyone
+  holding the node and a channel is a wider audience than that. Posting happens off
+  the relay path, so a feed can never slow a session down or fail one.
+
 - `internal/webhook`: closing a queue no longer races a send. A node shuts its
   feed down while sessions are still ending, so Close races Send by construction;
   signalling that by closing the channel turned the race into a send on a closed
