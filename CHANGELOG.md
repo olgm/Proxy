@@ -355,6 +355,11 @@
   from each existing node, 0% loss, HK 44.6 ms avg and Chicago 136.1 ms avg. Node was
   provisioned and destroyed on 2026-09-01; no topology refers to it and its IP is back
   in ty-a's pool.
+- Measured all three ty-c Japan regions from the live `hk` and `ch` nodes, 20 ICMP
+  echoes each: chain totals 180.6 ms (Tokyo 3), 181.0 ms (Tokyo 2) and 188.7 ms
+  (Osaka) against 165.6 ms for the `ty` node in place, so no ty-c node is worth
+  adding to these routes and Osaka is slower on both legs rather than trading one
+  for the other. ty-c has no Taiwan or Hong Kong region.
 - Pinned the Tailscale underlay to IPv4 on the HK↔Tokyo link, which had negotiated an
   IPv6 path costing 2.5 ms avg and 8.3 ms mdev against 0.5 ms on IPv4. Tokyo↔Chicago
   needed nothing: Chicago has no public IPv6. With both legs on IPv4 the chain is
