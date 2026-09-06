@@ -76,6 +76,20 @@ func (c *Client) List() ([]whitelist.Entry, error) {
 	return rep.Entries, nil
 }
 
+// Sessions returns the logins this node is relaying right now. A node with no
+// ingress refuses rather than answering an empty list: "nobody is online here"
+// and "I cannot tell you" are different answers.
+func (c *Client) Sessions() ([]Live, error) {
+	rep, err := c.Do(Request{Op: "sessions"})
+	if err != nil {
+		return nil, err
+	}
+	if err := rep.Err(); err != nil {
+		return nil, err
+	}
+	return rep.Live, nil
+}
+
 // Add lists a player. Give a name, a uuid, or both.
 func (c *Client) Add(name, uuid, tag string) (Reply, error) {
 	return c.Do(Request{Op: "add", Name: name, UUID: uuid, Tag: tag})

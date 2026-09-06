@@ -29,6 +29,11 @@ const (
 
 var players = map[string]string{"notch": notchUUID, "alex": alexUUID, "steve": steveUUID}
 
+// stubSessions stands in for a node's live register.
+type stubSessions []control.Live
+
+func (s stubSessions) Live() []control.Live { return s }
+
 type fakeMojang struct{}
 
 func (fakeMojang) LookupName(name string) (string, string, error) {
@@ -80,7 +85,7 @@ func startNode(t *testing.T, name string) (botcfg.Entry, *fakeNode) {
 		t.Fatal(err)
 	}
 	key := tunnel.NewKey()
-	s, err := control.NewServer(l, key, nil, fakeMojang{})
+	s, err := control.NewServer(l, key, nil, fakeMojang{}, stubSessions(nil))
 	if err != nil {
 		t.Fatal(err)
 	}

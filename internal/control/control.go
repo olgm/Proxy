@@ -52,6 +52,29 @@ type Reply struct {
 	Listed  bool              `json:"listed,omitempty"`
 	Entry   *whitelist.Entry  `json:"entry,omitempty"`
 	Entries []whitelist.Entry `json:"entries,omitempty"`
+	// Live answers the sessions op: who this node is relaying right now.
+	Live []Live `json:"live,omitempty"`
+}
+
+// Live is one session in progress, as the node sees it. There are no byte counts
+// here: a session's cost is known when it ends, and until then the only honest
+// figures are who and since when.
+//
+// IP is carried because the link is sealed and reaches one caller. What the
+// caller does with it is not the same question: it belongs in a manager's
+// private reply, and never in a channel feed.
+type Live struct {
+	Name  string    `json:"name"`
+	UUID  string    `json:"uuid"`
+	IP    string    `json:"ip,omitempty"`
+	Since time.Time `json:"since"`
+}
+
+// Sessions is what a node can say about who is logged in right now. proxyd's
+// registry is one; a node with no ingress has nothing to implement it with, and
+// passes nil.
+type Sessions interface {
+	Live() []Live
 }
 
 // Err is the reply as an error: nil when it succeeded.
@@ -73,6 +96,7 @@ type Resolver interface {
 type Server struct {
 	list   *whitelist.List
 	mojang Resolver // nil: an add has to carry both name and uuid
+	live   Sessions // nil: this node cannot answer the sessions op
 	allow  []netip.Prefix
 	seal   *sealer
 }
@@ -80,12 +104,12 @@ type Server struct {
 // NewServer prepares a server. Loopback may always connect; allow is who else
 // may, which is the bot's node. That is a TCP address, so trusting it is sound in
 // a way it would not be over UDP, and the key is on top of it, not instead.
-func NewServer(list *whitelist.List, key []byte, allow []netip.Prefix, r Resolver) (*Server, error) {
+func NewServer(list *whitelist.List, key []byte, allow []netip.Prefix, r Resolver, live Sessions) (*Server, error) {
 	s, err := newSealer(key)
 	if err != nil {
 		return nil, err
 	}
-	return &Server{list: list, mojang: r, allow: allow, seal: s}, nil
+	return &Server{list: list, mojang: r, live: live, allow: allow, seal: s}, nil
 }
 
 // Serve answers on ln until it is closed.
@@ -175,6 +199,11 @@ func (s *Server) apply(req Request) Reply {
 	switch req.Op {
 	case "list":
 		return Reply{OK: true, Entries: s.list.Entries()}
+	case "sessions":
+		if s.live == nil {
+			return fail("this node relays no sessions")
+		}
+		return Reply{OK: true, Live: s.live.Live()}
 	case "add":
 		return s.add(req)
 	case "remove":
@@ -246,6 +275,8 @@ func fail(msg string) Reply { return Reply{Error: msg} }
 
 func describe(r Reply) string {
 	switch {
+	case r.OK && r.Live != nil:
+		return fmt.Sprintf("ok %d live", len(r.Live))
 	case r.OK && r.Entry != nil:
 		return "ok " + r.Entry.Name + ":" + r.Entry.UUID
 	case r.OK:

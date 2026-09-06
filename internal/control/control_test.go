@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/olgm/proxy/internal/mojang"
 	"github.com/olgm/proxy/internal/tunnel"
@@ -60,6 +61,15 @@ func notchOnly() *fakeMojang {
 	}
 }
 
+// testLive is what every served node in these tests says is online. A node with
+// no ingress passes nil instead, which is a different answer and is tested for.
+var testLive = stubSessions{{Name: "Notch", UUID: notchUUID, IP: "203.0.113.9",
+	Since: time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)}}
+
+type stubSessions []Live
+
+func (s stubSessions) Live() []Live { return s }
+
 // serve starts a server over a fresh list and returns a client holding its key,
 // the list's path, and the raw address for tests that speak the wire themselves.
 func serve(t *testing.T, body string, r Resolver) (*Client, string) {
@@ -73,7 +83,7 @@ func serve(t *testing.T, body string, r Resolver) (*Client, string) {
 		t.Fatal(err)
 	}
 	key := tunnel.NewKey()
-	s, err := NewServer(l, key, nil, r)
+	s, err := NewServer(l, key, nil, r, testLive)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +307,7 @@ func TestReplyCannotBeReplayedAsRequest(t *testing.T) {
 }
 
 func TestAllowed(t *testing.T) {
-	s, err := NewServer(nil, tunnel.NewKey(), []netip.Prefix{netip.MustParsePrefix("198.51.100.10/32")}, nil)
+	s, err := NewServer(nil, tunnel.NewKey(), []netip.Prefix{netip.MustParsePrefix("198.51.100.10/32")}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,5 +362,50 @@ func TestIsUUIDAndDashed(t *testing.T) {
 	}
 	if got := dashed("short"); got != "short" {
 		t.Errorf("dashed left junk as %q", got)
+	}
+}
+
+func TestSessionsReportsWhoIsOnline(t *testing.T) {
+	c, _ := serve(t, "Notch:"+notchUUID+"\n", notchOnly())
+	live, err := c.Sessions()
+	if err != nil {
+		t.Fatalf("sessions: %v", err)
+	}
+	if len(live) != 1 {
+		t.Fatalf("got %d live sessions, want 1", len(live))
+	}
+	if live[0].Name != "Notch" || live[0].UUID != notchUUID || live[0].IP != "203.0.113.9" {
+		t.Fatalf("live session came back wrong: %+v", live[0])
+	}
+	if live[0].Since.IsZero() {
+		t.Error("a live session with no start time cannot be shown as a duration")
+	}
+}
+
+// "Nobody is online here" and "I cannot tell you" are different answers, and a
+// roster that merges them would quietly lose a node.
+func TestSessionsRefusedByANodeThatRelaysNone(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "whitelist.txt")
+	if err := os.WriteFile(p, []byte("Notch:"+notchUUID+"\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	l, err := whitelist.Open(p, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := tunnel.NewKey()
+	s, err := NewServer(l, key, nil, notchOnly(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go s.Serve(ln)
+
+	if _, err := (&Client{Addr: ln.Addr().String(), Key: key}).Sessions(); err == nil {
+		t.Fatal("a node with no ingress answered the sessions op")
 	}
 }

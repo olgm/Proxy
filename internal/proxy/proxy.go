@@ -173,6 +173,9 @@ type server struct {
 	// login and a logout are posted. feed is nil unless one was configured.
 	node string
 	feed *sessionFeed
+	// live is the node's register of sessions in progress, shared by every
+	// listener on it and answered over the control link.
+	live *live
 }
 
 // halfCloser is whatever the next leg turns out to be: a TCP connection on a
@@ -213,6 +216,7 @@ type node struct {
 	servers []*server
 	ctl     net.Listener
 	feed    *sessionFeed
+	live    *live
 }
 
 func (n *node) close() {
@@ -241,14 +245,14 @@ func start(cfg *Config) (*node, error) {
 	// One feed for the node, shared by every ingress on it. Off unless the
 	// environment holds a URL, which is how an operator turns it on.
 	feed := newSessionFeed(os.Getenv(EnvSessionsWebhook))
-	n := &node{feed: feed}
+	n := &node{feed: feed, live: newLive()}
 	var wg = &n.wg
 	for _, l := range cfg.Listeners {
 		s, err := newServer(l)
 		if err != nil {
 			return nil, err
 		}
-		s.node, s.feed = cfg.Name, feed
+		s.node, s.feed, s.live = cfg.Name, feed, n.live
 		n.servers = append(n.servers, s)
 		mode := l.Role()
 		if s.wl != nil {
@@ -291,7 +295,7 @@ func start(cfg *Config) (*node, error) {
 			if s.wl == nil {
 				continue
 			}
-			ln, err := startControl(cfg.Control, s)
+			ln, err := startControl(cfg.Control, s, n.live)
 			if err != nil {
 				return nil, err
 			}
@@ -315,7 +319,7 @@ func gated(cfg *Config) bool {
 // startControl serves the control link over the first whitelisted listener's
 // list. A node has at most one whitelist file, so any further whitelisted
 // listener sees the same edits on its next reload.
-func startControl(c *Control, s *server) (net.Listener, error) {
+func startControl(c *Control, s *server, live *live) (net.Listener, error) {
 	key, err := tunnel.DecodeKey(c.Key)
 	if err != nil {
 		return nil, fmt.Errorf("control: %w", err)
@@ -328,7 +332,7 @@ func startControl(c *Control, s *server) (net.Listener, error) {
 		}
 		allow = append(allow, p)
 	}
-	srv, err := control.NewServer(s.wl, key, allow, s.mojang)
+	srv, err := control.NewServer(s.wl, key, allow, s.mojang, live)
 	if err != nil {
 		return nil, err
 	}
@@ -421,7 +425,9 @@ func newServer(l Listener) (*server, error) {
 	if l.Net == "udp" && l.Minecraft != nil {
 		return nil, fmt.Errorf("listener %s: a Minecraft block belongs on the tcp listener players reach", l.Bind)
 	}
-	s := &server{Listener: l}
+	// Its own by default, replaced by the node's when start builds one: a server
+	// constructed on its own still has to be able to record a session.
+	s := &server{Listener: l, live: newLive()}
 	for _, a := range l.AllowFrom {
 		p, err := parsePrefix(a)
 		if err != nil {
@@ -682,10 +688,13 @@ func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake) {
 		Proto: int(h.ProtocolVersion), Start: time.Now(),
 	}
 	sess.Online = s.online.Add(1)
+	id := s.live.add(sess)
 	log.Printf("%s: login %s name=%q uuid=%q proto=%d online=%d", s.Bind, ip, name, uuid, h.ProtocolVersion, sess.Online)
 	s.feed.login(sess)
 
 	up, down := relay(c, u)
+
+	s.live.remove(id)
 
 	sess.End, sess.Up, sess.Down, sess.Wire = time.Now(), up, down, wireOf(u)
 	sess.Online = s.online.Add(-1)

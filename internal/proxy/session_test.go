@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/olgm/proxy/internal/control"
 	"github.com/olgm/proxy/internal/mc"
 )
 
@@ -161,4 +162,49 @@ func TestNoFeedIsNoFeed(t *testing.T) {
 	f.login(Session{Name: "Notch"})
 	f.logout(Session{Name: "Notch"})
 	f.Close()
+}
+
+// The register holds a session for exactly as long as it is being relayed, and
+// nothing after it. What remembers a finished session is the session log.
+func TestLiveRegisterTracksASession(t *testing.T) {
+	backend, got := fakeLoginBackend(t)
+	ingress, s := feedIngress(t, backend, whitelistFile(t, "Notch:"+notchUUID+"\n"), "")
+
+	if n := len(s.live.Live()); n != 0 {
+		t.Fatalf("%d sessions before anyone logged in", n)
+	}
+	c := dialIngress(t, ingress, 764, mc.IntentLogin, loginStart("Notch", notchRaw[:]))
+	select {
+	case <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("login never reached the backend")
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	var live []control.Live
+	for {
+		if live = s.live.Live(); len(live) == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d live sessions, want 1", len(live))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if live[0].Name != "Notch" || live[0].UUID != notchUUID {
+		t.Errorf("live session came back wrong: %+v", live[0])
+	}
+	// The IP is here, where a manager's private reply can reach it. The feed's
+	// own test asserts it never reaches a channel.
+	if live[0].IP != "127.0.0.1" {
+		t.Errorf("live session has no source: %+v", live[0])
+	}
+
+	c.Close()
+	for s.online.Load() != 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := len(s.live.Live()); n != 0 {
+		t.Fatalf("%d sessions after the logout", n)
+	}
 }

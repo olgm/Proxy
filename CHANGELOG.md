@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `proxyd`: a register of sessions in progress, and a `sessions` op on the control
+  link that reports it. It belongs to the node rather than to a listener, because a
+  node may hold several ingresses and "who is online here" is one answer across all
+  of them, and it lasts exactly as long as the goroutine relaying the session — a
+  logout leaves nothing behind. There are no byte counts in it: what a session cost
+  is known when it ends. A node with no ingress refuses the op rather than
+  answering an empty list, because "nobody is online here" and "I cannot tell you"
+  are different answers and a roster that merged them would quietly lose a node.
+
 - `probed`: a probe feed. When a window closes, the node that measured it posts one
   line per class — the same leg at one copy and at the count it really carries, in
   the same window, which is the comparison the whole service exists to make. The
