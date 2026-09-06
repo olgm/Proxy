@@ -84,9 +84,10 @@ type bot struct {
 	chain   *chain
 	adds    *limiter
 	members membersAPI
-	// roster keeps the online message up to date. Nil when no webhook was
-	// configured, which is the normal state.
-	roster *roster
+	// roster keeps the online message up to date, and watcher posts node and
+	// service transitions. Both nil when no webhook was configured.
+	roster  *roster
+	watcher *watcher
 }
 
 const unreachable = "The proxy could not be reached; try again in a minute."

@@ -268,6 +268,26 @@ func expandProbe(t *Topology, next int) (map[string]*probe.Config, []check, int,
 			unit: "probed", port: port,
 			addr: net.JoinHostPort(t.Nodes[e.to].Addr, strconv.Itoa(port))})
 	}
+
+	// The health link is allocated only when the status feed asks for it. It
+	// exists for exactly one caller, so without that caller it would be an open
+	// port with nobody on the other end of it.
+	if t.Feeds != nil && t.Feeds.Status != nil && t.Discord != nil {
+		bot := t.botNode()
+		for _, node := range probeNodes(cfgs) {
+			cfgs[node].Health = &probe.HealthConfig{
+				Bind:      bindAddr(t.Nodes[node].BindAddr, next),
+				Key:       t.keys.probeHealth(node),
+				AllowFrom: []string{t.Nodes[bot].Addr},
+			}
+			if bot != node {
+				checks = append(checks, check{from: bot, to: node, why: "health",
+					unit: "probed", port: next,
+					addr: net.JoinHostPort(t.Nodes[node].Addr, strconv.Itoa(next))})
+			}
+			next++
+		}
+	}
 	return cfgs, checks, next, nil
 }
 
@@ -333,6 +353,9 @@ func printProbe(t *Topology, cfgs map[string]*probe.Config) {
 			bind = "(dials only)"
 		}
 		fmt.Printf("%s (%s)\n", n, t.Nodes[n].Addr)
+		if c.Health != nil {
+			fmt.Printf("    %-3s %-22s    %-14s %-6s     %s\n", "tcp", c.Health.Bind, "health", "", "bot")
+		}
 		for _, k := range c.Classes {
 			role := "relay"
 			switch {

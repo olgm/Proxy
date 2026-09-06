@@ -38,6 +38,7 @@
   "feeds": {
     "sessions": {"webhook_env": "DISCORD_SESSIONS_WEBHOOK"},
     "probe":    {"webhook_env": "DISCORD_PROBE_WEBHOOK", "windows": ["10m"]},
-    "online":   {"webhook_env": "DISCORD_ONLINE_WEBHOOK", "nodes": ["hk"]}
+    "online":   {"webhook_env": "DISCORD_ONLINE_WEBHOOK", "nodes": ["hk"]},
+    "status":   {"webhook_env": "DISCORD_STATUS_WEBHOOK"}
   }
 }

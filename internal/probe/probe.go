@@ -26,6 +26,7 @@ type Node struct {
 	socks   []*socket
 	w       *writer
 	feed    *feed
+	health  net.Listener
 
 	stop     chan struct{}
 	stopOnce sync.Once
@@ -219,6 +220,14 @@ func New(cfg Config) (*Node, error) {
 			return nil, err
 		}
 	}
+	// Bound here rather than in Start, alongside the UDP sockets and for the
+	// same reason: a port that cannot be taken should fail the constructor, not
+	// a goroutine nobody is watching.
+	if cfg.Health != nil {
+		if n.health, err = n.serveHealth(cfg.Health); err != nil {
+			return nil, err
+		}
+	}
 	return n, nil
 }
 
@@ -257,6 +266,9 @@ func (n *Node) Close() {
 		close(n.stop)
 		for _, s := range n.socks {
 			s.conn.Close()
+		}
+		if n.health != nil {
+			n.health.Close()
 		}
 	})
 	n.wg.Wait()

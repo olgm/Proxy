@@ -440,7 +440,7 @@ func TestDiscordBlockOpensControlToTheBot(t *testing.T) {
 		t.Errorf("rule: %s", rule)
 	}
 
-	bc := botConfig(top, cfgs)
+	bc := botConfig(top, cfgs, nil)
 	if bc.Guild != "g" || bc.Primary != "hk" || bc.AuditChannel != "a" || len(bc.Entries) != 2 {
 		t.Fatalf("bot config: %+v", bc)
 	}

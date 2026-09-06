@@ -31,6 +31,18 @@ type Config struct {
 	// falls to the end in Entries order, so an entry added later shows up rather
 	// than disappearing.
 	OnlineNodes []string `json:"online_nodes,omitempty"`
+	// Probes are the probed health links, one per node running it. Present only
+	// when the status feed is configured, because nothing else dials them.
+	Probes []Probed `json:"probes,omitempty"`
+}
+
+// Probed is one node's probed health link, with the key it holds. Separate from
+// Entry on purpose: it is a different service, a different port and a different
+// key, and holding this one is not a way into a session.
+type Probed struct {
+	Node string `json:"node"`
+	Addr string `json:"addr"`
+	Key  string `json:"key"`
 }
 
 // Entry is one whitelisted entry node's control link, with the key it holds.

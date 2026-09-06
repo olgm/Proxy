@@ -58,6 +58,11 @@ type Config struct {
 	// window configured, which is the only one whose p99 means anything.
 	FeedWindows []string `json:"feed_windows,omitempty"`
 
+	// Health is the sealed TCP link the bot dials to ask whether probed is
+	// running. Absent means probed listens for probes and nothing else, which is
+	// what a topology with no status feed gets.
+	Health *HealthConfig `json:"health,omitempty"`
+
 	Log string `json:"log,omitempty"`
 	// MaxLogMB rotates the log at this size, keeping one previous file. Disk is
 	// therefore bounded at twice this and never grows without limit.

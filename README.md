@@ -71,6 +71,8 @@ needs one more thing before `deploy`; see "Discord bot" below.
 | `discord.audit_channel` | optional; channel that gets one line per change |
 | `feeds` | optional; posts what the chain is doing to Discord — see below |
 | `feeds.<name>.webhook_env` | environment variable holding that feed's webhook URL |
+| `feeds.probe.windows` | which probe windows reach the channel. Default: the longest |
+| `feeds.online.nodes` | order entries appear in the roster |
 
 Hop ports are allocated automatically, and so is one control port per entry with a
 whitelist. `config` prints the map.
@@ -500,6 +502,7 @@ Who posts a feed is not a setting, because it follows from who can see it:
 | `sessions` | `proxyd` | every ingress, about its own node only |
 | `probe` | `probed` | every node that originates a class |
 | `online` | `proxybot` | one message, edited in place, across every entry |
+| `status` | `proxybot` | node and service transitions, watched from outside |
 
 ### sessions
 
@@ -591,6 +594,35 @@ To do that it keeps one thing between restarts — the id of the message — in
 it costs one duplicate message, and the whitelist files remain the only state that
 matters.
 
+### status
+
+Node and service transitions. The bot posts these because a node that is down
+cannot report that it is down:
+
+```
+**ty** proxyd is down (the node answers, its control port does not)
+**hk** unreachable — no answer from the node at all
+**ty** recovered
+```
+
+Every 20 seconds the bot dials each entry's control link and each node's `probed`
+health link. A **refused** connection is the kernel saying the host is there and
+nothing is on that port, which is a service being down; **silence** is the node
+itself being gone. Those are different faults and never read the same. A node that
+did not answer at all is not then asked about `probed`, so one fault is one line.
+
+A change has to hold for three dials — about a minute — before anything is
+posted, so a single dropped packet is not an outage. A fault that is already there
+when the bot starts is announced immediately, because a node that was down before
+the bot came up is still news.
+
+Turning this feed on gives `probed` one more thing: a small TCP port per node,
+sealed under a key of its own, answering nothing but "I am running, with N
+classes". `deploy` allocates it, opens it to the bot's node only, and verifies it
+like any other link. Without `feeds.status` there is no port, because nothing
+would ever dial it. The key is `probed`'s and deliberately not the node's control
+key: holding it is not a way into a session.
+
 ## Firewall
 
 After deploy, proxyctl tests every link from the side that will really dial it and
@@ -606,6 +638,7 @@ ufw allow <entry-port>/tcp                                # entry node
 ufw allow from <prev-hop-ip> to any port <hop> proto tcp  # every other node
 ufw allow from <prev-hop-ip> to any port <hop> proto udp  # ... on a udp route
 ufw allow from <bot-node-ip> to any port <ctl> proto tcp  # every entry the bot does not live on
+ufw allow from <bot-node-ip> to any port <health> proto tcp  # probed, with a status feed
 ```
 
 The entry needs nothing inbound for a UDP route: it dials out and answers come back

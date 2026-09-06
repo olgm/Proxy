@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- `proxybot`: a status feed. Every 20 seconds it dials each entry's control link
+  and each node's probed health link, and posts a transition that has held for
+  three dials — a single dropped packet is not an outage, and a fault already
+  there when the bot starts is announced at once because it is still news. A
+  refused connection is the kernel saying the host is there and nothing is on that
+  port, which is a service being down; silence is the node being gone. Those never
+  read the same, and a node that did not answer at all is not then asked about
+  probed, so one fault is one line.
+- `probed`: a health link, deployed only when `feeds.status` asks for it. A small
+  sealed TCP port answering "running, with N classes", under a key of probed's own
+  — holding it is not a way into a session, which is why it is not the node's
+  control key. proxyd still does not know probed exists, and vice versa: the bot
+  dials both and joins the answers, because it is the only thing that can.
+
 - `internal/sealed`: the sealed request/reply exchange — a challenge, then one AEAD
   frame each way — moved out of `internal/control` unchanged, so probed's health
   link can put the same bytes on the wire rather than an approximation of them. No

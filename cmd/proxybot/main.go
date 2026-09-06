@@ -35,6 +35,7 @@ func main() {
 	}
 	b := &bot{cfg: cfg, chain: ch, adds: newLimiter(5, time.Minute)}
 	b.roster = newRoster(ch, cfg.OnlineNodes, statePath)
+	b.watcher = newWatcher(ch, cfg)
 	if err := run(b, token); err != nil {
 		log.Fatalf("%v", err)
 	}

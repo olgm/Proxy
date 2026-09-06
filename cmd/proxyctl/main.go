@@ -330,11 +330,11 @@ func main() {
 
 	switch cmd {
 	case "config":
-		printConfigs(t, cfgs)
+		printConfigs(t, cfgs, pcfgs)
 		printProbe(t, pcfgs)
 		printFeeds(t, cfgs, pcfgs)
 	case "deploy":
-		printConfigs(t, cfgs)
+		printConfigs(t, cfgs, pcfgs)
 		printProbe(t, pcfgs)
 		printFeeds(t, cfgs, pcfgs)
 		fail(deploy(t, cfgs, pcfgs, checks, *repo))
@@ -694,7 +694,7 @@ func expand(t *Topology) (map[string]*proxy.Config, []check, error) {
 
 // botConfig is /etc/proxyd/bot.json for the bot's node: every entry's control
 // address and key, and which one is the primary.
-func botConfig(t *Topology, cfgs map[string]*proxy.Config) *botcfg.Config {
+func botConfig(t *Topology, cfgs map[string]*proxy.Config, pcfgs map[string]*probe.Config) *botcfg.Config {
 	bc := &botcfg.Config{
 		Guild:        t.Discord.Guild,
 		Roles:        t.Discord.Roles,
@@ -709,6 +709,21 @@ func botConfig(t *Topology, cfgs map[string]*proxy.Config) *botcfg.Config {
 			Node: name,
 			Addr: net.JoinHostPort(t.Nodes[name].Addr, port),
 			Key:  c.Key,
+		})
+	}
+	// The health links, when the status feed asked for them. A node running
+	// probed without one simply is not listed, and the bot watches proxyd there
+	// and says nothing about probed.
+	for _, name := range probeNodes(pcfgs) {
+		h := pcfgs[name].Health
+		if h == nil {
+			continue
+		}
+		_, port, _ := net.SplitHostPort(h.Bind)
+		bc.Probes = append(bc.Probes, botcfg.Probed{
+			Node: name,
+			Addr: net.JoinHostPort(t.Nodes[name].Addr, port),
+			Key:  h.Key,
 		})
 	}
 	return bc
@@ -982,7 +997,7 @@ func names(cfgs map[string]*proxy.Config) []string {
 	return out
 }
 
-func printConfigs(t *Topology, cfgs map[string]*proxy.Config) {
+func printConfigs(t *Topology, cfgs map[string]*proxy.Config, pcfgs map[string]*probe.Config) {
 	for _, n := range names(cfgs) {
 		fmt.Printf("%s (%s)\n", n, t.Nodes[n].Addr)
 		for _, l := range cfgs[n].Listeners {
@@ -1008,7 +1023,7 @@ func printConfigs(t *Topology, cfgs map[string]*proxy.Config) {
 		}
 	}
 	if t.Discord != nil {
-		bc := botConfig(t, cfgs)
+		bc := botConfig(t, cfgs, pcfgs)
 		var entries []string
 		for _, e := range bc.Entries {
 			entries = append(entries, e.Node+"="+e.Addr)
@@ -1174,7 +1189,7 @@ func deploy(t *Topology, cfgs map[string]*proxy.Config, pcfgs map[string]*probe.
 		fmt.Printf("   install  %s", lastLines(out, 2))
 	}
 	if t.Discord != nil {
-		if err := deployBot(t, cfgs, tmp, repo, roots); err != nil {
+		if err := deployBot(t, cfgs, pcfgs, tmp, repo, roots); err != nil {
 			return err
 		}
 	}
@@ -1190,7 +1205,7 @@ func deploy(t *Topology, cfgs map[string]*proxy.Config, pcfgs map[string]*probe.
 
 // deployBot installs proxybot on its node, after every proxyd, so the control
 // links it will dial are already answering.
-func deployBot(t *Topology, cfgs map[string]*proxy.Config, tmp, repo string, roots map[string]bool) error {
+func deployBot(t *Topology, cfgs map[string]*proxy.Config, pcfgs map[string]*probe.Config, tmp, repo string, roots map[string]bool) error {
 	name := t.botNode()
 	node := t.Nodes[name]
 	fmt.Printf("== %s (%s) bot\n", name, node.SSH)
@@ -1209,7 +1224,7 @@ func deployBot(t *Topology, cfgs map[string]*proxy.Config, tmp, repo string, roo
 		return fmt.Errorf("build proxybot %s: %w", arch, err)
 	}
 	fmt.Printf("   build    linux/%s\n", arch)
-	b, _ := json.MarshalIndent(botConfig(t, cfgs), "", "  ")
+	b, _ := json.MarshalIndent(botConfig(t, cfgs, pcfgs), "", "  ")
 	cfgPath := filepath.Join(tmp, "bot.json")
 	if err := os.WriteFile(cfgPath, append(b, '\n'), 0o600); err != nil {
 		return err

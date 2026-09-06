@@ -80,6 +80,20 @@ func (k *keyring) probe(a, b string) string {
 
 // control returns the key sealing one node's control link. The bot's node is
 // given every entry's; each entry holds only its own.
+// probeHealth is probed's own key for its health link. It is deliberately not
+// the node's control key: holding probed's keys must not be a way into a
+// session, and that is exactly as true of this one as of the leg keys.
+func (k *keyring) probeHealth(node string) string {
+	id := "probe-ctl|" + node
+	if v, ok := k.keys[id]; ok {
+		return v
+	}
+	v := tunnel.EncodeKey(tunnel.NewKey())
+	k.keys[id] = v
+	k.dirty = true
+	return v
+}
+
 func (k *keyring) control(node string) string {
 	id := "ctl|" + node
 	if v, ok := k.keys[id]; ok {

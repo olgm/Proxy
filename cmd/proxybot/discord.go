@@ -94,6 +94,7 @@ func run(b *bot, token string) error {
 		}
 	}()
 	go b.roster.run()
+	go b.watcher.run()
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
