@@ -504,14 +504,14 @@ func TestDiscordBlockIsChecked(t *testing.T) {
 // The token goes into a root-only file through the script itself; without one
 // in the environment, a file already on the node is kept.
 func TestBotInstallScriptTokenHandling(t *testing.T) {
-	with := installBotScript(true, "abc.def")
+	with := installBotScript(true, "abc.def", "")
 	if !strings.Contains(with, "install -m 0600 -o root -g root /dev/stdin /etc/proxyd/bot.env <<'ENV'\nDISCORD_BOT_TOKEN=abc.def\nENV") {
 		t.Errorf("token not written root-only:\n%s", with)
 	}
 	if strings.Contains(with, "sudo") {
 		t.Error("root install still uses sudo")
 	}
-	without := installBotScript(false, "")
+	without := installBotScript(false, "", "")
 	if strings.Contains(without, "DISCORD_BOT_TOKEN=") || !strings.Contains(without, "[ -f /etc/proxyd/bot.env ] ||") {
 		t.Errorf("missing token not handled:\n%s", without)
 	}

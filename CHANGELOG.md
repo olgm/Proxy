@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- `proxyctl`: a `feeds` block in `topology.json` turns on Discord feeds, and every
+  one of them is off until it is named there. A feed names an *environment
+  variable* holding its webhook URL rather than the URL, because a webhook URL is a
+  bearer credential and topology.json is the file people edit and paste at each
+  other; two feeds naming the same variable land in the same channel. The URL is
+  read from the operator's environment at deploy time and carried to the node
+  inside the install script over ssh stdin, into a root-owned env file the unit
+  reads — the path the bot token already takes, so it is never on a command line
+  and never in /tmp. Deleting a feed removes that file, so turning one off turns it
+  off. `config` lists which feeds are on and which nodes post them, and never
+  prints a URL.
+- `proxyctl`: who posts a feed is not a setting, because it follows from who can
+  see it. proxyd posts sessions, from every ingress and about its own node only;
+  probed posts measurements, from the nodes that originate a class and not from the
+  one that merely answers; the bot posts the roster and the up/down watch, because
+  only it can see the whole fleet, or see a node that has stopped answering at all.
+
 - `internal/webhook`: one Discord webhook client, shared by everything that posts
   a feed. stdlib only, because proxyd and probed are dependency-free binaries on a
   node and both post their own; proxybot has discordgo already and uses this anyway,

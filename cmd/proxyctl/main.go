@@ -15,9 +15,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/olgm/proxy/internal/botcfg"
 	"github.com/olgm/proxy/internal/probe"
@@ -37,6 +39,9 @@ type Topology struct {
 	// path touches. Delete the block and the chain is unchanged: it is a separate
 	// binary, unit and user, and proxyd does not know it exists.
 	Probe *Probe `json:"probe,omitempty"`
+	// Feeds, when set, post what the chain is doing to Discord webhooks. Every
+	// feed is off until it is named here, and all of them are optional.
+	Feeds *Feeds `json:"feeds,omitempty"`
 
 	keys *keyring
 	// nextPort is where automatic allocation got to, so probed's ports carry on
@@ -55,6 +60,91 @@ type Discord struct {
 	Roles map[string]botcfg.Role `json:"roles"`
 	// AuditChannel gets one line per change, when set.
 	AuditChannel string `json:"audit_channel,omitempty"`
+}
+
+// Feeds are the Discord channels this chain talks to. Each one names an
+// environment variable holding a webhook URL rather than the URL itself: a
+// webhook URL is a bearer credential, and topology.json is the file people edit
+// and paste at each other. Two feeds naming the same variable land in the same
+// channel, which is the whole of "different, or the same".
+//
+// Who posts what is not a setting, because it follows from who can see it. A
+// node knows its own sessions and no others; only probed has the measurements;
+// only the bot can see the whole fleet, or see a node that has stopped
+// answering at all.
+type Feeds struct {
+	// Sessions is posted by proxyd on every ingress: a line per login and per
+	// logout, carrying that node's own online count. The fleet-wide roster is
+	// Online, and is a separate feed for that reason.
+	Sessions *Feed `json:"sessions,omitempty"`
+	// Probe is posted by probed on every node that originates a class. A node
+	// that only answers — Chicago today — has nothing to say and is not given
+	// the URL.
+	Probe *ProbeFeed `json:"probe,omitempty"`
+	// Online is the roster: one message the bot keeps up to date in place.
+	Online *OnlineFeed `json:"online,omitempty"`
+	// Status is node and service transitions. The bot posts it because a node
+	// that is down cannot report that it is down.
+	Status *Feed `json:"status,omitempty"`
+}
+
+// Feed is the one thing every feed needs: where to post.
+type Feed struct {
+	// WebhookEnv names the environment variable holding the webhook URL. It is
+	// read from the operator's environment at deploy time and carried to the
+	// node inside the install script over ssh stdin, the same path the bot token
+	// takes, so it is never on a command line and never in /tmp.
+	WebhookEnv string `json:"webhook_env"`
+}
+
+// ProbeFeed picks which windows reach the channel. probed measures and logs
+// every window in the probe block whatever this says; this is only what is worth
+// reading. Without it the four classes Hong Kong originates post eight messages
+// a minute. Empty means the longest window configured, which is the one whose
+// p99 has enough samples behind it to mean anything.
+type ProbeFeed struct {
+	Feed
+	Windows []string `json:"windows,omitempty"`
+}
+
+// OnlineFeed sets the order entry nodes appear in the roster. A node not named
+// falls to the end in the order bot.json holds it, so a new entry shows up
+// rather than disappearing.
+type OnlineFeed struct {
+	Feed
+	Nodes []string `json:"nodes,omitempty"`
+}
+
+// named is every configured feed with the name it is configured under, for
+// error messages and for the config listing.
+func (f *Feeds) named() []struct {
+	name string
+	feed *Feed
+} {
+	var out []struct {
+		name string
+		feed *Feed
+	}
+	add := func(name string, fd *Feed) {
+		if fd != nil {
+			out = append(out, struct {
+				name string
+				feed *Feed
+			}{name, fd})
+		}
+	}
+	if f == nil {
+		return nil
+	}
+	add("sessions", f.Sessions)
+	if f.Probe != nil {
+		add("probe", &f.Probe.Feed)
+	}
+	if f.Online != nil {
+		add("online", &f.Online.Feed)
+	}
+	add("status", f.Status)
+	return out
 }
 
 type Node struct {
@@ -243,9 +333,11 @@ func main() {
 	case "config":
 		printConfigs(t, cfgs)
 		printProbe(t, pcfgs)
+		printFeeds(t, cfgs, pcfgs)
 	case "deploy":
 		printConfigs(t, cfgs)
 		printProbe(t, pcfgs)
+		printFeeds(t, cfgs, pcfgs)
 		fail(deploy(t, cfgs, pcfgs, checks, *repo))
 	case "status":
 		fail(status(t))
@@ -330,6 +422,9 @@ func load(path string) (*Topology, error) {
 	if err := t.checkDiscord(); err != nil {
 		return nil, err
 	}
+	if err := t.checkFeeds(); err != nil {
+		return nil, err
+	}
 	seeds, err := t.whitelistSeeds()
 	if err != nil {
 		return nil, err
@@ -404,6 +499,110 @@ func (t *Topology) checkDiscord() error {
 // motdFiles is the listing document each entry answers with, by node. Like a
 // whitelist it belongs to one entry, so two routes entering the same node may not
 // disagree about it.
+// checkFeeds validates the shape of the feeds block, and only the shape. Whether
+// the environment actually holds the URLs is deploy's question: every other
+// command has to keep working in a shell where .env was never sourced.
+func (t *Topology) checkFeeds() error {
+	if t.Feeds == nil {
+		return nil
+	}
+	for _, f := range t.Feeds.named() {
+		if f.feed.WebhookEnv == "" {
+			return fmt.Errorf("feeds.%s: webhook_env is required; delete the block to turn the feed off", f.name)
+		}
+	}
+	// A feed nobody can post is a typo, not a preference, so say so here rather
+	// than deploying a chain that is quietly missing half of what was asked for.
+	if t.Feeds.Probe != nil && t.Probe == nil {
+		return fmt.Errorf("feeds.probe is posted by probed, and there is no probe block to deploy it")
+	}
+	if t.Feeds.Online != nil && t.Discord == nil {
+		return fmt.Errorf("feeds.online is posted by the bot, and there is no discord block")
+	}
+	if t.Feeds.Status != nil && t.Discord == nil {
+		return fmt.Errorf("feeds.status is posted by the bot, and there is no discord block")
+	}
+	if p := t.Feeds.Probe; p != nil {
+		for _, w := range p.Windows {
+			if !slices.Contains(t.Probe.Windows, w) {
+				return fmt.Errorf("feeds.probe.windows: %q is not one of the probe windows %v", w, t.Probe.Windows)
+			}
+		}
+	}
+	if o := t.Feeds.Online; o != nil {
+		// The roster is built from the entries the bot reaches over their
+		// control links, which is exactly the whitelisted ones. A relay named
+		// here would be a heading no player can ever appear under.
+		entries := t.whitelistedEntries()
+		for _, n := range o.Nodes {
+			if !slices.Contains(entries, n) {
+				if _, ok := t.Nodes[n]; !ok {
+					return fmt.Errorf("feeds.online.nodes: no node %q", n)
+				}
+				return fmt.Errorf("feeds.online.nodes: %q is not an entry with a whitelist, so no player can be online there", n)
+			}
+		}
+	}
+	return nil
+}
+
+// Fixed names the services read. The variable in topology.json is the operator's
+// own; this is what it is called once it reaches the node, so a feed is off
+// exactly when its variable is unset and there is nothing else to check.
+const (
+	envSessionsWebhook = "PROXYD_SESSIONS_WEBHOOK"
+	envProbeWebhook    = "PROBED_PROBE_WEBHOOK"
+	envOnlineWebhook   = "PROXYBOT_ONLINE_WEBHOOK"
+	envStatusWebhook   = "PROXYBOT_STATUS_WEBHOOK"
+)
+
+// feedEnv renders the env file for one service: the variables it should hold,
+// with the URLs read from the operator's environment. An empty return means the
+// service has no feed and its file should be removed, which is what makes
+// deleting a block from topology.json actually turn the feed off.
+//
+// A named variable that is not set is an error rather than a warning. The
+// alternative is deploying a chain that looks configured and posts nothing.
+func feedEnv(vars map[string]*Feed) (string, error) {
+	var b strings.Builder
+	for _, name := range sortedFeedVars(vars) {
+		f := vars[name]
+		url := os.Getenv(f.WebhookEnv)
+		if url == "" {
+			return "", fmt.Errorf("$%s is not set: put the webhook URL in .env and `set -a; . ./.env; set +a`", f.WebhookEnv)
+		}
+		if !strings.HasPrefix(url, "https://") {
+			return "", fmt.Errorf("$%s does not look like a webhook URL", f.WebhookEnv)
+		}
+		fmt.Fprintf(&b, "%s=%s\n", name, url)
+	}
+	return b.String(), nil
+}
+
+func sortedFeedVars(m map[string]*Feed) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// sessionFeedNodes are the nodes that post a session line: every ingress, which
+// is every node holding a listener that parses a handshake.
+func sessionFeedNodes(cfgs map[string]*proxy.Config) []string {
+	var out []string
+	for _, name := range names(cfgs) {
+		for _, l := range cfgs[name].Listeners {
+			if l.Minecraft != nil {
+				out = append(out, name)
+				break
+			}
+		}
+	}
+	return out
+}
+
 func (t *Topology) motdFiles() (map[string]string, error) {
 	out := map[string]string{}
 	for _, r := range t.Routes {
@@ -818,6 +1017,81 @@ func printConfigs(t *Topology, cfgs map[string]*proxy.Config) {
 	fmt.Println()
 }
 
+// printFeeds says which feeds are on and which nodes post them. It never prints
+// a URL: this output goes in terminals and issue reports, and a webhook URL is a
+// bearer credential. The variable name is safe and is the useful half anyway —
+// it is what has to be in .env.
+func printFeeds(t *Topology, cfgs map[string]*proxy.Config, pcfgs map[string]*probe.Config) {
+	if t.Feeds == nil {
+		return
+	}
+	line := func(name, posts, env string, nodes []string, note string) {
+		if note != "" {
+			note = "  " + note
+		}
+		fmt.Printf("    %-9s %-9s $%-26s %s%s\n", name, posts, env, strings.Join(nodes, " "), note)
+	}
+	fmt.Println("feeds:")
+	if f := t.Feeds.Sessions; f != nil {
+		line("sessions", "proxyd", f.WebhookEnv, sessionFeedNodes(cfgs), "")
+	}
+	if f := t.Feeds.Probe; f != nil {
+		line("probe", "probed", f.WebhookEnv, probeOriginators(pcfgs), "windows "+strings.Join(t.probeFeedWindows(), " "))
+	}
+	if f := t.Feeds.Online; f != nil {
+		line("online", "proxybot", f.WebhookEnv, []string{t.botNode()}, "order "+strings.Join(t.onlineOrder(), " "))
+	}
+	if f := t.Feeds.Status; f != nil {
+		line("status", "proxybot", f.WebhookEnv, []string{t.botNode()}, "")
+	}
+	fmt.Println()
+}
+
+// probeFeedWindows is which windows reach the channel: what was asked for, or
+// the longest one configured. The longest is the default because it is the only
+// one whose p99 has enough samples behind it to mean anything.
+func (t *Topology) probeFeedWindows() []string {
+	if t.Feeds == nil || t.Feeds.Probe == nil {
+		return nil
+	}
+	if len(t.Feeds.Probe.Windows) > 0 {
+		return t.Feeds.Probe.Windows
+	}
+	longest, d := "", time.Duration(0)
+	for _, w := range t.Probe.Windows {
+		p, err := time.ParseDuration(w)
+		if err == nil && p > d {
+			longest, d = w, p
+		}
+	}
+	if longest == "" {
+		return nil
+	}
+	return []string{longest}
+}
+
+// onlineOrder is the order entry nodes appear in the roster: those named, then
+// every other whitelisted entry in route order, so an entry added later shows up
+// at the end rather than not at all.
+func (t *Topology) onlineOrder() []string {
+	if t.Feeds == nil || t.Feeds.Online == nil {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, n := range t.Feeds.Online.Nodes {
+		if !seen[n] {
+			out, seen[n] = append(out, n), true
+		}
+	}
+	for _, n := range t.whitelistedEntries() {
+		if !seen[n] {
+			out, seen[n] = append(out, n), true
+		}
+	}
+	return out
+}
+
 func marshal(c *proxy.Config) []byte {
 	b, _ := json.MarshalIndent(c, "", "  ")
 	return append(b, '\n')
@@ -833,6 +1107,18 @@ func deploy(t *Topology, cfgs map[string]*proxy.Config, pcfgs map[string]*probe.
 	motds, err := t.motdFiles()
 	if err != nil {
 		return err
+	}
+	// Resolved before anything is uploaded: a missing variable should stop the
+	// deploy, not leave half the chain posting and half of it silent.
+	sessionEnv := ""
+	if t.Feeds != nil && t.Feeds.Sessions != nil {
+		if sessionEnv, err = feedEnv(map[string]*Feed{envSessionsWebhook: t.Feeds.Sessions}); err != nil {
+			return fmt.Errorf("feeds.sessions: %w", err)
+		}
+	}
+	ingress := map[string]bool{}
+	for _, n := range sessionFeedNodes(cfgs) {
+		ingress[n] = true
 	}
 	// Before anything is uploaded: a config carrying a key we then failed to
 	// record would leave that node unable to talk to the next deploy.
@@ -888,7 +1174,11 @@ func deploy(t *Topology, cfgs map[string]*proxy.Config, pcfgs map[string]*probe.
 				return fmt.Errorf("%s: upload motd: %w", name, err)
 			}
 		}
-		out, err := ssh(node.SSH, installScript(t.User, root, seed != "", motd != ""))
+		env := ""
+		if ingress[name] {
+			env = sessionEnv
+		}
+		out, err := ssh(node.SSH, installScript(t.User, root, seed != "", motd != "", env))
 		if err != nil {
 			return fmt.Errorf("%s: install: %w\n%s", name, err, out)
 		}
@@ -941,7 +1231,20 @@ func deployBot(t *Topology, cfgs map[string]*proxy.Config, tmp, repo string, roo
 	if err := scp(node.SSH, cfgPath, "/tmp/proxybot.config.json"); err != nil {
 		return fmt.Errorf("%s: upload bot config: %w", name, err)
 	}
-	out, err := ssh(node.SSH, installBotScript(root, token))
+	vars := map[string]*Feed{}
+	if t.Feeds != nil {
+		if t.Feeds.Online != nil {
+			vars[envOnlineWebhook] = &t.Feeds.Online.Feed
+		}
+		if t.Feeds.Status != nil {
+			vars[envStatusWebhook] = t.Feeds.Status
+		}
+	}
+	feeds, err := feedEnv(vars)
+	if err != nil {
+		return fmt.Errorf("feeds: %w", err)
+	}
+	out, err := ssh(node.SSH, installBotScript(root, token, feeds))
 	if err != nil {
 		return fmt.Errorf("%s: install proxybot: %w\n%s", name, err, out)
 	}
@@ -1005,7 +1308,7 @@ func lastLines(b []byte, n int) string {
 
 // installScript is intentionally idempotent: deploy is the only verb, and running
 // it twice must be safe.
-func installScript(user string, root, whitelist, motd bool) string {
+func installScript(user string, root, whitelist, motd bool, feeds string) string {
 	sudo := "sudo -n"
 	if root {
 		sudo = ""
@@ -1039,6 +1342,7 @@ $SUDO install -d -m 0755 /etc/proxyd
 $SUDO install -m 0640 -o root -g "$USER" /tmp/proxyd.config.json /etc/proxyd/config.json
 $SUDO install -d -m 0750 -o "$USER" -g "$USER" %s
 %s
+%s
 rm -f /tmp/proxyd.new /tmp/proxyd.config.json
 
 $SUDO tee /etc/systemd/system/proxyd.service >/dev/null <<'UNIT'
@@ -1049,6 +1353,7 @@ Wants=network-online.target
 
 [Service]
 User=%s
+EnvironmentFile=-/etc/proxyd/feeds.env
 ExecStart=/usr/local/bin/proxyd -c /etc/proxyd/config.json
 Restart=always
 RestartSec=2
@@ -1072,14 +1377,26 @@ $SUDO systemctl enable proxyd >/dev/null 2>&1
 $SUDO systemctl restart proxyd
 sleep 1
 $SUDO systemctl is-active proxyd
-`, sudo, user, whitelistDir, seed, user)
+`, sudo, user, whitelistDir, seed, envFile("/etc/proxyd/feeds.env", `"$USER"`, feeds), user)
+}
+
+// envFile writes a service's feed variables, or removes the file when there are
+// none. Removing it is what makes deleting a feed from topology.json actually
+// turn the feed off rather than leaving the last URL behind. The body travels
+// inside this script over ssh stdin, so a webhook URL is never on a command
+// line and never lands in /tmp.
+func envFile(path, group, body string) string {
+	if body == "" {
+		return "$SUDO rm -f " + path
+	}
+	return "$SUDO install -m 0640 -o root -g " + group + " /dev/stdin " + path + " <<'FEEDENV'\n" + body + "FEEDENV"
 }
 
 // installBotScript installs proxybot beside proxyd. The token travels inside
 // this script, over ssh's stdin, into a root-only file the unit reads: never on
 // a command line, never through /tmp. Without a token in the environment an
 // existing file is kept, so a redeploy does not need it.
-func installBotScript(root bool, token string) string {
+func installBotScript(root bool, token, feeds string) string {
 	sudo := "sudo -n"
 	if root {
 		sudo = ""
@@ -1105,6 +1422,7 @@ $SUDO install -d -m 0755 /etc/proxyd
 $SUDO install -m 0640 -o root -g proxybot /tmp/proxybot.config.json /etc/proxyd/bot.json
 rm -f /tmp/proxybot.new /tmp/proxybot.config.json
 %s
+%s
 
 $SUDO tee /etc/systemd/system/proxybot.service >/dev/null <<'UNIT'
 [Unit]
@@ -1115,6 +1433,7 @@ Wants=network-online.target
 [Service]
 User=proxybot
 EnvironmentFile=/etc/proxyd/bot.env
+EnvironmentFile=-/etc/proxyd/bot-feeds.env
 ExecStart=/usr/local/bin/proxybot -c /etc/proxyd/bot.json
 Restart=always
 RestartSec=5
@@ -1137,7 +1456,7 @@ $SUDO systemctl enable proxybot >/dev/null 2>&1
 $SUDO systemctl restart proxybot
 sleep 2
 $SUDO systemctl is-active proxybot
-`, sudo, env)
+`, sudo, env, envFile("/etc/proxyd/bot-feeds.env", "proxybot", feeds))
 }
 
 func status(t *Topology) error {

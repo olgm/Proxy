@@ -346,9 +346,37 @@ func probeNodes(cfgs map[string]*probe.Config) []string {
 	return out
 }
 
+// probeOriginators are the nodes with something to report: a class with no up
+// links is one this node starts, and only an originator writes a line. Chicago
+// answers everything and originates nothing, so it is not given a webhook URL it
+// would never use.
+func probeOriginators(cfgs map[string]*probe.Config) []string {
+	var out []string
+	for _, n := range probeNodes(cfgs) {
+		for _, k := range cfgs[n].Classes {
+			if len(k.Up) == 0 {
+				out = append(out, n)
+				break
+			}
+		}
+	}
+	return out
+}
+
 // deployProbe installs probed on every node that measures anything, after every
 // proxyd, so a leg is carrying real traffic before it is asked about.
 func deployProbe(t *Topology, cfgs map[string]*probe.Config, tmp, repo string, roots map[string]bool) error {
+	probeFeed := ""
+	if t.Feeds != nil && t.Feeds.Probe != nil {
+		var err error
+		if probeFeed, err = feedEnv(map[string]*Feed{envProbeWebhook: &t.Feeds.Probe.Feed}); err != nil {
+			return fmt.Errorf("feeds.probe: %w", err)
+		}
+	}
+	originates := map[string]bool{}
+	for _, n := range probeOriginators(cfgs) {
+		originates[n] = true
+	}
 	built := map[string]string{}
 	for _, name := range probeNodes(cfgs) {
 		node := t.Nodes[name]
@@ -379,7 +407,11 @@ func deployProbe(t *Topology, cfgs map[string]*probe.Config, tmp, repo string, r
 		if err := scp(node.SSH, cfgPath, "/tmp/probed.config.json"); err != nil {
 			return fmt.Errorf("%s: upload probe config: %w", name, err)
 		}
-		out, err := ssh(node.SSH, installProbeScript(root))
+		env := ""
+		if originates[name] {
+			env = probeFeed
+		}
+		out, err := ssh(node.SSH, installProbeScript(root, env))
 		if err != nil {
 			return fmt.Errorf("%s: install probed: %w\n%s", name, err, out)
 		}
@@ -391,7 +423,7 @@ func deployProbe(t *Topology, cfgs map[string]*probe.Config, tmp, repo string, r
 // installProbeScript gives probed its own account and its own state directory.
 // It holds the probe keys and nothing else: compromising it must not be a way
 // into a live session, which is why it does not read proxyd's config.
-func installProbeScript(root bool) string {
+func installProbeScript(root bool, feeds string) string {
 	sudo := "sudo -n"
 	if root {
 		sudo = ""
@@ -408,6 +440,7 @@ $SUDO install -m 0755 /tmp/probed.new /usr/local/bin/probed
 $SUDO install -d -m 0755 /etc/probed
 $SUDO install -m 0640 -o root -g "$USER" /tmp/probed.config.json %s
 $SUDO install -d -m 0750 -o "$USER" -g "$USER" %s
+%s
 rm -f /tmp/probed.new /tmp/probed.config.json
 
 $SUDO tee /etc/systemd/system/probed.service >/dev/null <<'UNIT'
@@ -418,6 +451,7 @@ Wants=network-online.target
 
 [Service]
 User=%s
+EnvironmentFile=-/etc/probed/feeds.env
 ExecStart=/usr/local/bin/probed -c %s
 Restart=always
 RestartSec=2
@@ -441,7 +475,7 @@ $SUDO systemctl enable probed >/dev/null 2>&1
 $SUDO systemctl restart probed
 sleep 1
 $SUDO systemctl is-active probed
-`, sudo, probeUser, probeCfgPath, probeDir, probeUser, probeCfgPath)
+`, sudo, probeUser, probeCfgPath, probeDir, envFile("/etc/probed/feeds.env", `"$USER"`, feeds), probeUser, probeCfgPath)
 }
 
 // uninstallProbe removes the service and its config. The dataset is left behind:
