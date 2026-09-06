@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/olgm/proxy/internal/control"
+	"github.com/olgm/proxy/internal/jsonl"
 	"github.com/olgm/proxy/internal/mc"
 	"github.com/olgm/proxy/internal/mojang"
 	"github.com/olgm/proxy/internal/tunnel"
@@ -41,6 +42,9 @@ const (
 	// denyMessage is what a non-whitelisted player sees. Dropping the connection
 	// instead would be indistinguishable from the chain being down.
 	denyMessage = "You are not whitelisted on this proxy."
+
+	// defaultSessionLogMB bounds the session record, keeping one previous file.
+	defaultSessionLogMB = 64
 )
 
 type Config struct {
@@ -51,6 +55,15 @@ type Config struct {
 	// Control is the link through which this node's whitelist is managed from
 	// outside. Only a node with a whitelist has one.
 	Control *Control `json:"control,omitempty"`
+	// SessionLog is where finished sessions are written down, so the bot can
+	// show a player's history. Empty means the node remembers nothing past the
+	// journal line it already writes. Only an ingress writes one.
+	SessionLog string `json:"session_log,omitempty"`
+	// MaxSessionLogMB bounds it, keeping one previous file, so the record never
+	// occupies more than twice this however long a node runs. Retention is
+	// therefore a size and not a time: on a busy node the oldest sessions fall
+	// off sooner. Default 64.
+	MaxSessionLogMB int `json:"max_session_log_mb,omitempty"`
 }
 
 // Control is a TCP listener answering whitelist requests from the Discord bot,
@@ -231,6 +244,9 @@ func (n *node) close() {
 	if n.ctl != nil {
 		n.ctl.Close()
 	}
+	if n.live != nil && n.live.log != nil {
+		n.live.log.Close()
+	}
 	// Last: a logout posted as the node goes down should still get out.
 	n.feed.Close()
 }
@@ -246,6 +262,22 @@ func start(cfg *Config) (*node, error) {
 	// environment holds a URL, which is how an operator turns it on.
 	feed := newSessionFeed(os.Getenv(EnvSessionsWebhook))
 	n := &node{feed: feed, live: newLive()}
+	// The record of finished sessions, on any node that sees a login. It holds
+	// what the journal line already holds, on the same machine and for the same
+	// operator, so it is not a new disclosure — but it is bounded, and a node
+	// that cannot open it keeps relaying rather than refusing to start.
+	if cfg.SessionLog != "" && gated(cfg) {
+		mb := cfg.MaxSessionLogMB
+		if mb == 0 {
+			mb = defaultSessionLogMB
+		}
+		w, err := jsonl.NewWriter(cfg.SessionLog, mb)
+		if err != nil {
+			log.Printf("session log: %v; this node will remember no sessions", err)
+		} else {
+			n.live.log, n.live.path = w, cfg.SessionLog
+		}
+	}
 	var wg = &n.wg
 	for _, l := range cfg.Listeners {
 		s, err := newServer(l)
@@ -698,6 +730,7 @@ func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake) {
 
 	sess.End, sess.Up, sess.Down, sess.Wire = time.Now(), up, down, wireOf(u)
 	sess.Online = s.online.Add(-1)
+	s.live.record(sess)
 	log.Printf("%s: logout %s name=%q uuid=%q for %s up=%s down=%s%s online=%d",
 		s.Bind, ip, name, uuid, sess.For(),
 		size(up), size(down), wireCost(u, up+down), sess.Online)

@@ -6,12 +6,14 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/olgm/proxy/internal/control"
+	"github.com/olgm/proxy/internal/jsonl"
 	"github.com/olgm/proxy/internal/mc"
 )
 
@@ -206,5 +208,51 @@ func TestLiveRegisterTracksASession(t *testing.T) {
 	}
 	if n := len(s.live.Live()); n != 0 {
 		t.Fatalf("%d sessions after the logout", n)
+	}
+}
+
+// A finished session is written down, because the register above forgets it the
+// moment the relay ends and /watch has to be able to look it up afterwards.
+func TestFinishedSessionIsWrittenDown(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.jsonl")
+	w, err := jsonl.NewWriter(path, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend, got := fakeLoginBackend(t)
+	ingress, s := feedIngress(t, backend, whitelistFile(t, "Notch:"+notchUUID+"\n"), "")
+	s.live.log, s.live.path = w, path
+
+	c := dialIngress(t, ingress, 764, mc.IntentLogin, loginStart("Notch", notchRaw[:]))
+	select {
+	case <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("login never reached the backend")
+	}
+	c.Close()
+	for s.online.Load() != 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	past, err := s.live.History(nil, 10)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	if len(past) != 1 {
+		t.Fatalf("%d sessions written down, want 1", len(past))
+	}
+	p := past[0]
+	if p.Name != "Notch" || p.UUID != notchUUID || p.IP != "127.0.0.1" {
+		t.Errorf("session written down wrong: %+v", p)
+	}
+	if p.End.Before(p.Start) {
+		t.Errorf("session ended before it started: %+v", p)
+	}
+	// A uuid nobody played under matches nothing, dashed or not.
+	if got, _ := s.live.History([]string{"853c80ef-3c37-49fd-aa49-938b674adae6"}, 10); len(got) != 0 {
+		t.Errorf("history matched the wrong player: %+v", got)
+	}
+	if got, _ := s.live.History([]string{strings.ReplaceAll(notchUUID, "-", "")}, 10); len(got) != 1 {
+		t.Errorf("a bare uuid did not match the dashed one it was written as")
 	}
 }

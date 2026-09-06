@@ -1,14 +1,11 @@
 package probe
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
-	"sync"
 	"time"
+
+	"github.com/olgm/proxy/internal/jsonl"
 )
 
 // line is one record of the dataset. One object per class per window, newline
@@ -42,76 +39,10 @@ type line struct {
 	Mdev float64 `json:"mdev"`
 }
 
-// writer appends reports to the dataset and keeps it bounded. One previous file
-// is kept, so the whole thing never occupies more than twice the configured size
-// however long a node runs.
-type writer struct {
-	mu     sync.Mutex
-	path   string
-	maxLen int64
-	f      *os.File
-	n      int64
-}
-
-func newWriter(path string, maxMB int) (*writer, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
-	}
-	w := &writer{path: path, maxLen: int64(maxMB) << 20}
-	return w, w.open()
-}
-
-func (w *writer) open() error {
-	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return err
-	}
-	st, err := f.Stat()
-	if err != nil {
-		f.Close()
-		return err
-	}
-	w.f, w.n = f, st.Size()
-	return nil
-}
-
-func (w *writer) write(r *Report) error {
-	// encoding/json escapes > and < for HTML by default, which would spell every
-	// leg in the dataset "hk\u003ety". This is a file people grep.
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(record(r)); err != nil {
-		return err
-	}
-	b := buf.Bytes() // Encode already ends the line
-
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.maxLen > 0 && w.n+int64(len(b)) > w.maxLen {
-		if err := w.rotate(); err != nil {
-			return err
-		}
-	}
-	n, err := w.f.Write(b)
-	w.n += int64(n)
-	return err
-}
-
-func (w *writer) rotate() error {
-	if err := w.f.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(w.path, w.path+".1"); err != nil {
-		return err
-	}
-	return w.open()
-}
-
-func (w *writer) Close() error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.f.Close()
+// newWriter opens the dataset. The file mechanics are internal/jsonl's, shared
+// with proxyd's session log: rotation is not worth having two of.
+func newWriter(path string, maxMB int) (*jsonl.Writer, error) {
+	return jsonl.NewWriter(path, maxMB)
 }
 
 func record(r *Report) line {

@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/olgm/proxy/internal/jsonl"
 	"github.com/olgm/proxy/internal/tunnel"
 )
 
@@ -24,7 +25,7 @@ type Node struct {
 	links   []*link
 	classes map[uint8]*class
 	socks   []*socket
-	w       *writer
+	w       *jsonl.Writer
 	feed    *feed
 	health  net.Listener
 
@@ -407,7 +408,7 @@ func (c *class) flush(now time.Time) {
 	c.mu.Unlock()
 
 	for _, r := range out {
-		if err := c.n.w.write(r); err != nil {
+		if err := c.n.w.Write(record(r)); err != nil {
 			log.Printf("%s: probe log: %v", c.n.cfg.Name, err)
 		}
 		_, _, rt := r.Loss()

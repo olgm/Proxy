@@ -290,8 +290,9 @@ func (r *Route) normalize() error {
 // operator-owned and read-only to the service. StateDirectory= in the unit is what
 // keeps this one path writable under ProtectSystem=strict.
 const (
-	whitelistDir  = "/var/lib/proxyd"
-	whitelistPath = whitelistDir + "/whitelist.txt"
+	whitelistDir   = "/var/lib/proxyd"
+	sessionLogPath = whitelistDir + "/sessions.jsonl"
+	whitelistPath  = whitelistDir + "/whitelist.txt"
 	// motdPath sits with the config rather than the whitelist: it is operator
 	// owned and proxyd only ever reads it.
 	motdPath = "/etc/proxyd/motd.json"
@@ -665,6 +666,11 @@ func expand(t *Topology) (map[string]*proxy.Config, []check, error) {
 	// the hops. Only loopback may connect, which is enough for proxyctl over
 	// ssh, until a discord block names the bot's node; then that node may too,
 	// and its way in to every entry it does not live on is checked like a hop.
+	// Every ingress writes down the sessions it relayed, which is what /watch
+	// reads. It holds what the journal line already holds, and is bounded.
+	for _, name := range sessionFeedNodes(cfgs) {
+		cfgs[name].SessionLog = sessionLogPath
+	}
 	seeds, err := t.whitelistSeeds()
 	if err != nil {
 		return nil, nil, err

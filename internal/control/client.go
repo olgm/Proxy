@@ -91,6 +91,19 @@ func (c *Client) Sessions() ([]Live, error) {
 	return rep.Live, nil
 }
 
+// History returns the newest finished sessions on this node belonging to any of
+// uuids, newest first. Give no uuids for every session.
+func (c *Client) History(uuids []string, limit int) ([]Past, error) {
+	rep, err := c.Do(Request{Op: "history", UUIDs: uuids, Limit: limit})
+	if err != nil {
+		return nil, err
+	}
+	if err := rep.Err(); err != nil {
+		return nil, err
+	}
+	return rep.Past, nil
+}
+
 // Add lists a player. Give a name, a uuid, or both.
 func (c *Client) Add(name, uuid, tag string) (Reply, error) {
 	return c.Do(Request{Op: "add", Name: name, UUID: uuid, Tag: tag})

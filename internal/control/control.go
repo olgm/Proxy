@@ -42,6 +42,12 @@ type Request struct {
 	Name string `json:"name,omitempty"`
 	UUID string `json:"uuid,omitempty"`
 	Tag  string `json:"tag,omitempty"`
+	// UUIDs and Limit are the history op: whose sessions, and how many of the
+	// newest of them. A caller paging across several nodes asks each for
+	// offset+limit and slices the merge, because no node can page a total order
+	// it only holds part of.
+	UUIDs []string `json:"uuids,omitempty"`
+	Limit int      `json:"limit,omitempty"`
 }
 
 // Reply is the answer. Entry is the line an add wrote or a remove dropped; on an
@@ -55,6 +61,30 @@ type Reply struct {
 	Entries []whitelist.Entry `json:"entries,omitempty"`
 	// Live answers the sessions op: who this node is relaying right now.
 	Live []Live `json:"live,omitempty"`
+	// Past answers the history op, newest first.
+	Past []Past `json:"past,omitempty"`
+}
+
+// Past is one finished session, as the node wrote it down. Unlike Live it has
+// the figures a session's cost is only known at the end of.
+//
+// There is no owner here on purpose. A line's tag is the whole ownership model
+// and it lives in the whitelist, which is where a caller joins this by uuid — a
+// second copy recorded at login would be a second thing that could be wrong.
+type Past struct {
+	// Node is filled in by the caller, which is the only side that knows which
+	// node it asked.
+	Node  string    `json:"node,omitempty"`
+	Name  string    `json:"name"`
+	UUID  string    `json:"uuid"`
+	IP    string    `json:"ip,omitempty"`
+	Proto int       `json:"proto,omitempty"`
+	Start time.Time `json:"start"`
+	End   time.Time `json:"end"`
+	Up    int64     `json:"up"`
+	Down  int64     `json:"down"`
+	// Wire is what the tunnel spent carrying the payload, zero on a TCP route.
+	Wire uint64 `json:"wire,omitempty"`
 }
 
 // Live is one session in progress, as the node sees it. There are no byte counts
@@ -71,12 +101,19 @@ type Live struct {
 	Since time.Time `json:"since"`
 }
 
-// Sessions is what a node can say about who is logged in right now. proxyd's
-// registry is one; a node with no ingress has nothing to implement it with, and
-// passes nil.
+// Sessions is what a node can say about the sessions it has relayed: the ones in
+// progress, and the ones it wrote down. proxyd's registry is one; a node with no
+// ingress has nothing to implement it with, and passes nil.
 type Sessions interface {
 	Live() []Live
+	// History returns the newest finished sessions belonging to any of uuids,
+	// newest first. An empty uuids means every session.
+	History(uuids []string, limit int) ([]Past, error)
 }
+
+// maxHistory bounds one reply. A page is a handful of sessions; anything near
+// this is a caller that has lost track of what it is asking for.
+const maxHistory = 200
 
 // Err is the reply as an error: nil when it succeeded.
 func (r Reply) Err() error {
@@ -205,6 +242,19 @@ func (s *Server) apply(req Request) Reply {
 			return fail("this node relays no sessions")
 		}
 		return Reply{OK: true, Live: s.live.Live()}
+	case "history":
+		if s.live == nil {
+			return fail("this node relays no sessions")
+		}
+		n := min(req.Limit, maxHistory)
+		if n <= 0 {
+			n = 10
+		}
+		past, err := s.live.History(req.UUIDs, n)
+		if err != nil {
+			return fail(err.Error())
+		}
+		return Reply{OK: true, Past: past}
 	case "add":
 		return s.add(req)
 	case "remove":
@@ -278,6 +328,8 @@ func describe(r Reply) string {
 	switch {
 	case r.OK && r.Live != nil:
 		return fmt.Sprintf("ok %d live", len(r.Live))
+	case r.OK && r.Past != nil:
+		return fmt.Sprintf("ok %d past", len(r.Past))
 	case r.OK && r.Entry != nil:
 		return "ok " + r.Entry.Name + ":" + r.Entry.UUID
 	case r.OK:

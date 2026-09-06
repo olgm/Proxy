@@ -34,6 +34,8 @@ type stubSessions []control.Live
 
 func (s stubSessions) Live() []control.Live { return s }
 
+func (s stubSessions) History([]string, int) ([]control.Past, error) { return nil, nil }
+
 type fakeMojang struct{}
 
 func (fakeMojang) LookupName(name string) (string, string, error) {

@@ -71,6 +71,23 @@ type stubSessions []Live
 
 func (s stubSessions) Live() []Live { return s }
 
+// testPast is what every served node in these tests has written down.
+var testPast = []Past{{Name: "Notch", UUID: notchUUID, IP: "203.0.113.9",
+	Start: time.Date(2026, 9, 5, 11, 0, 0, 0, time.UTC),
+	End:   time.Date(2026, 9, 5, 11, 42, 0, 0, time.UTC), Up: 4200, Down: 51700, Wire: 111600}}
+
+func (s stubSessions) History(uuids []string, limit int) ([]Past, error) {
+	if len(uuids) == 0 {
+		return testPast, nil
+	}
+	for _, u := range uuids {
+		if u == notchUUID {
+			return testPast, nil
+		}
+	}
+	return nil, nil
+}
+
 // serve starts a server over a fresh list and returns a client holding its key,
 // the list's path, and the raw address for tests that speak the wire themselves.
 func serve(t *testing.T, body string, r Resolver) (*Client, string) {
@@ -409,4 +426,53 @@ func TestSessionsRefusedByANodeThatRelaysNone(t *testing.T) {
 	if _, err := (&Client{Addr: ln.Addr().String(), Key: key}).Sessions(); err == nil {
 		t.Fatal("a node with no ingress answered the sessions op")
 	}
+}
+
+func TestHistoryReturnsFinishedSessions(t *testing.T) {
+	c, _ := serve(t, "Notch:"+notchUUID+"\n", notchOnly())
+
+	past, err := c.History(nil, 10)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	if len(past) != 1 || past[0].Name != "Notch" {
+		t.Fatalf("history = %+v", past)
+	}
+	if past[0].Up != 4200 || past[0].Wire != 111600 {
+		t.Errorf("a finished session should carry what it cost: %+v", past[0])
+	}
+
+	// Filtered to somebody who was never here.
+	got, err := c.History([]string{alexUUID}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("history matched the wrong player: %+v", got)
+	}
+}
+
+// A caller that asks for the world gets a page, not the world: the reply has to
+// fit in one sealed frame and a manager is reading it.
+func TestHistoryIsCapped(t *testing.T) {
+	var asked int
+	s := &Server{live: capturingSessions{&asked}}
+	s.apply(Request{Op: "history", Limit: 100000})
+	if asked > maxHistory {
+		t.Fatalf("asked the node for %d sessions, past the %d cap", asked, maxHistory)
+	}
+	// And a caller that asks for nothing still gets something back.
+	asked = 0
+	s.apply(Request{Op: "history"})
+	if asked <= 0 {
+		t.Fatalf("a limit of zero asked for %d", asked)
+	}
+}
+
+type capturingSessions struct{ limit *int }
+
+func (c capturingSessions) Live() []Live { return nil }
+func (c capturingSessions) History(_ []string, limit int) ([]Past, error) {
+	*c.limit = limit
+	return nil, nil
 }

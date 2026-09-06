@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- `internal/jsonl`: the rotating record file, moved out of `internal/probe` so
+  proxyd's session log and probed's dataset are one implementation rather than two.
+  It also reads back now: `Tail` returns the newest records matching a filter,
+  across the current file and the rotated one, holding only what it keeps — the
+  right way round for a file bounded at tens of megabytes and read a few times a
+  day. A line truncated by a crash mid-write is skipped rather than failing the
+  read, because the records before it are still good.
+- `proxyd`: an ingress writes down the sessions it finishes, at
+  `/var/lib/proxyd/sessions.jsonl`, and a `history` op on the control link reads
+  the newest of them back by uuid. It holds what the journal line already holds —
+  same data, same machine, same operator — and is bounded by size, keeping one
+  previous file, so retention is a size and not a time. No owner is recorded: a
+  line's tag is the ownership model and it lives in the whitelist, so a caller
+  joins the two by uuid rather than trusting a second copy taken at login.
+
 - `proxybot`: a status feed. Every 20 seconds it dials each entry's control link
   and each node's probed health link, and posts a transition that has held for
   three dials — a single dropped packet is not an outage, and a fault already
