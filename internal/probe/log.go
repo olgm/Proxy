@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"math"
 	"time"
-
-	"github.com/olgm/proxy/internal/jsonl"
 )
 
 // line is one record of the dataset. One object per class per window, newline
@@ -37,12 +35,6 @@ type line struct {
 	P90  float64 `json:"p90"`
 	P99  float64 `json:"p99"`
 	Mdev float64 `json:"mdev"`
-}
-
-// newWriter opens the dataset. The file mechanics are internal/jsonl's, shared
-// with proxyd's session log: rotation is not worth having two of.
-func newWriter(path string, maxMB int) (*jsonl.Writer, error) {
-	return jsonl.NewWriter(path, maxMB)
 }
 
 func record(r *Report) line {

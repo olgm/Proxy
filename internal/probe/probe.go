@@ -217,7 +217,7 @@ func New(cfg Config) (*Node, error) {
 	}
 
 	if n.anyOriginates() {
-		if n.w, err = newWriter(cfg.Log, cfg.MaxLogMB); err != nil {
+		if n.w, err = jsonl.NewWriter(cfg.Log, cfg.MaxLogMB); err != nil {
 			return nil, err
 		}
 	}

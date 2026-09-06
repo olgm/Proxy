@@ -77,44 +77,44 @@ func (b *bot) watch(m member, user string, page int) watchResult {
 		}
 	}
 
-	var b2 strings.Builder
-	fmt.Fprintf(&b2, "**Watching <@%s>**\n", user)
-	b2.WriteString("\n**Accounts**\n")
+	var out strings.Builder
+	fmt.Fprintf(&out, "**Watching <@%s>**\n", user)
+	out.WriteString("\n**Accounts**\n")
 	if len(mine) == 0 {
-		b2.WriteString("none\n")
+		out.WriteString("none\n")
 	}
 	for _, e := range mine {
-		fmt.Fprintf(&b2, "`%s` `%s`\n", ign(e.Name), e.UUID)
+		fmt.Fprintf(&out, "`%s` `%s`\n", ign(e.Name), e.UUID)
 	}
 
 	// No accounts means nothing to look up, and asking four nodes for the
 	// history of an empty set would return everyone's.
 	if len(uuids) == 0 {
-		return watchResult{text: b2.String(), user: user, page: page}
+		return watchResult{text: out.String(), user: user, page: page}
 	}
 
-	b2.WriteString("\n**Online now**\n")
+	out.WriteString("\n**Online now**\n")
 	if on := b.online(uuids); len(on) == 0 {
-		b2.WriteString("nobody\n")
+		out.WriteString("nobody\n")
 	} else {
 		for _, l := range on {
-			fmt.Fprintf(&b2, "`%s` on **%s** from `%s` · %s\n", ign(l.Name), l.Node, l.IP, since(l.Since))
+			fmt.Fprintf(&out, "`%s` on **%s** from `%s` · %s\n", ign(l.Name), l.Node, l.IP, since(l.Since))
 		}
 	}
 
 	past, more, err := b.history(uuids, page)
 	if err != nil {
-		b2.WriteString("\n**Sessions**\nthe nodes could not be reached\n")
-		return watchResult{text: b2.String(), user: user, page: page}
+		out.WriteString("\n**Sessions**\nthe nodes could not be reached\n")
+		return watchResult{text: out.String(), user: user, page: page}
 	}
-	fmt.Fprintf(&b2, "\n**Sessions** — page %d\n", page+1)
+	fmt.Fprintf(&out, "\n**Sessions** — page %d\n", page+1)
 	if len(past) == 0 && page == 0 {
-		b2.WriteString("none recorded\n")
+		out.WriteString("none recorded\n")
 	}
 	for _, p := range past {
-		b2.WriteString(sessionLine(p) + "\n")
+		out.WriteString(sessionLine(p) + "\n")
 	}
-	return watchResult{text: b2.String(), user: user, page: page, more: more}
+	return watchResult{text: out.String(), user: user, page: page, more: more}
 }
 
 // liveAt is one open session with the node it is on.
