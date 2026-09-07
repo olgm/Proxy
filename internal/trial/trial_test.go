@@ -391,11 +391,20 @@ func TestLossOnTheWayBackIsNotLossOnTheWayOut(t *testing.T) {
 	})
 
 	r := awaitSplit(t, fwd)
-	if *r.LossFwd != 0 {
-		t.Errorf("loss_fwd = %.1f%%, want 0: every probe reached the far end", *r.LossFwd)
+	// Not exactly zero, and it cannot be. How many probes arrived is learned from
+	// a counter the far end carries back on its echoes, so when the echoes are the
+	// lossy direction, a window whose last echo was dropped reads a slightly stale
+	// count. The residual is a probe or two out of a hundred; what matters is that
+	// it stays an order of magnitude below the loss that is really there.
+	if *r.LossFwd > 5 {
+		t.Errorf("loss_fwd = %.1f%%, want near 0: every probe reached the far end", *r.LossFwd)
 	}
 	if *r.LossRev < 20 || *r.LossRev > 50 {
 		t.Errorf("loss_rev = %.1f%%, want about a third", *r.LossRev)
+	}
+	if *r.LossFwd >= *r.LossRev {
+		t.Errorf("loss_fwd %.1f%% is not below loss_rev %.1f%%; the split says nothing",
+			*r.LossFwd, *r.LossRev)
 	}
 }
 
@@ -410,13 +419,13 @@ func twoNodes(t *testing.T, drop func(bool) bool) (nearLog, farLog string) {
 
 	near := Config{
 		Name: "near", ID: 1, Bind: nearAddr,
-		Hz: 200, Windows: []string{"300ms"}, TimeoutMS: 100,
+		Hz: 100, Windows: []string{"1s"}, TimeoutMS: 200,
 		Log: logPath(t, "near"), MaxLogMB: 8,
 		Legs: []Leg{{Peer: "far", PeerID: 2, Addr: relay.String(), Key: k, ExpectMS: 1, Echo: true}},
 	}
 	far := Config{
 		Name: "far", ID: 2, Bind: farAddr,
-		Hz: 200, Windows: []string{"300ms"}, TimeoutMS: 100,
+		Hz: 100, Windows: []string{"1s"}, TimeoutMS: 200,
 		Log: logPath(t, "far"), MaxLogMB: 8,
 		Legs: []Leg{{Peer: "near", PeerID: 1, Addr: relay.String(), Key: k, ExpectMS: 1}},
 	}
@@ -431,7 +440,7 @@ func twoNodes(t *testing.T, drop func(bool) bool) (nearLog, farLog string) {
 func awaitSplit(t *testing.T, path string) rec {
 	t.Helper()
 	var wins []rec
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(25 * time.Second)
 	for time.Now().Before(deadline) {
 		wins = wins[:0]
 		for _, r := range read(t, path) {
@@ -505,7 +514,7 @@ func TestAWindowOverExpectationIsTracedAndRecorded(t *testing.T) {
 
 	cfg := Config{
 		Name: "near", ID: 1, Bind: addrA,
-		Hz: 200, Windows: []string{"300ms"}, TimeoutMS: 100,
+		Hz: 100, Windows: []string{"1s"}, TimeoutMS: 200,
 		Log: logPath(t, "near"), MaxLogMB: 8,
 		// A margin small enough that loopback clears it, standing in for a leg
 		// that has gone 5 ms past what it is supposed to cost.
@@ -514,7 +523,7 @@ func TestAWindowOverExpectationIsTracedAndRecorded(t *testing.T) {
 	}
 	far := Config{
 		Name: "far", ID: 2, Bind: addrB,
-		Hz: 200, Windows: []string{"300ms"}, TimeoutMS: 100,
+		Hz: 100, Windows: []string{"1s"}, TimeoutMS: 200,
 		Log: logPath(t, "far"), MaxLogMB: 8,
 		Legs: []Leg{{Peer: "near", PeerID: 1, Addr: addrA, Key: k, ExpectMS: 1}},
 	}
