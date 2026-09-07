@@ -342,7 +342,11 @@ func trialCmd(file, repo string, args []string) error {
 		return nil
 	case "deploy":
 		printTrial(m, cfgs)
-		if err := deployTrial(m, cfgs, repo); err != nil {
+		// Named nodes only, when asked. The mesh is still expanded whole, so the
+		// legs and keys are the ones the finished mesh will use — this only stages
+		// who gets it first, which is how a service reaches a node carrying players
+		// after it has been watched somewhere that is not.
+		if err := deployTrial(m, cfgs, repo, args[1:]); err != nil {
 			return err
 		}
 		return keys.save()
@@ -356,7 +360,15 @@ func trialCmd(file, repo string, args []string) error {
 	return fmt.Errorf("trial: unknown verb %q; want config, deploy, status, pull, report or uninstall", verb)
 }
 
-func deployTrial(m *TrialMesh, cfgs map[string]*trial.Config, repo string) error {
+func deployTrial(m *TrialMesh, cfgs map[string]*trial.Config, repo string, only []string) error {
+	want := map[string]bool{}
+	for _, n := range only {
+		if _, ok := m.Nodes[n]; !ok {
+			return fmt.Errorf("trial deploy: no node called %s", n)
+		}
+		want[n] = true
+	}
+
 	tmp, err := os.MkdirTemp("", "proxyctl-trial")
 	if err != nil {
 		return err
@@ -365,6 +377,9 @@ func deployTrial(m *TrialMesh, cfgs map[string]*trial.Config, repo string) error
 
 	built := map[string]string{}
 	for _, name := range m.nodeNames() {
+		if len(want) > 0 && !want[name] {
+			continue
+		}
 		node := m.Nodes[name]
 		fmt.Printf("== %s (%s) trial\n", name, node.SSH)
 

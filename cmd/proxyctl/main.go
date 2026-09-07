@@ -370,7 +370,7 @@ func usage() {
              and the whitelist)
   whitelist  list | add <name> [uuid] | remove <name|uuid>
              on every entry that holds a whitelist, over ssh
-  trial      config | deploy | status | pull | report | uninstall
+  trial      config | deploy [node...] | status | pull | report | uninstall
              the bake-off mesh from trial.json, for legs no route uses yet.
              Separate from everything above and temporary; see agents/trial.md
 
