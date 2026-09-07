@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- `internal/trial`, `triald`: a bake-off harness for candidate nodes, beside probed
+  and never instead of it. probed measures the production path and may not be
+  pointed off it; every leg here is one no route uses, because the question is
+  which nodes a route should use. So: its own binary, unit, user, port and keys,
+  legs written by hand since there is nothing in the routes to derive them from,
+  and deletion when it has answered.
+
+  Three things it does that probed must not. Nothing is de-duplicated — probed
+  collapses the copies racing into an exit because a player's packet only has to
+  arrive once, and here which copy won and by how much *is* the measurement. The
+  whole route travels on the wire, the only place in this repo a node identifies
+  itself in a datagram, because a copy that cannot say where it has been answers
+  nothing; the ids are data and the key still decides which leg a datagram belongs
+  to. And every hop echoes what it forwards.
+
+  That last one is what makes the numbers real. A chain that only forwards gives
+  arrival times taken on different clocks, so a leg reads as one-way delay plus
+  clock offset — and four of the six nodes run undisciplined timesyncd against
+  legs whose one-way delay is about a millisecond. The error would be larger than
+  the signal and drift would look exactly like the thing being hunted. Echoing
+  puts both timestamps of a round trip on one machine. What survives with no clock
+  sync at all: per-leg round trips, loss split by direction, jitter, the racing
+  margin — competing copies land on the same node and are compared against that
+  node's one clock — and cross-leg failure correlation, which needs only the
+  one-second alignment `tick` already provides. What does not, and is not claimed:
+  one-way latency split by direction.
+
 - `internal/window`: the windowed aggregation and its percentiles, moved out of
   `internal/probe` so that a second measurement service can put its numbers beside
   probed's and have the comparison mean something. Two copies of a percentile drift
