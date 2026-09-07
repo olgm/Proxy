@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `proxyctl`: `trial report`'s worst column is the slowest single round trip a
+  window saw, not the highest p99 it reported. p99 of a sixty-sample window is the
+  second-worst of sixty, so one outlier sits above it and never appears — and then
+  shows up only as an mdev larger than the p99 printed beside it, which reads as
+  arithmetic that cannot be true rather than as the one spike it is. The first live
+  report had a row saying p99 1.48 ms and mdev 32.92; the missing number was a
+  single 806 ms answer to a probe sent before that leg's firewall was open.
+
 - `proxyctl`: `trial report` now groups a race by the run a copy belongs to, and
   separates the median p99 from the worst one. Running it against the live mesh is
   what found both. It had been timing a copy that started at hk against one that

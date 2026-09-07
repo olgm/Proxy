@@ -28,6 +28,7 @@ type trialRec struct {
 	Loss float64 `json:"loss"`
 	P50  float64 `json:"p50"`
 	P99  float64 `json:"p99"`
+	Max  float64 `json:"max"`
 	Mdev float64 `json:"mdev"`
 
 	Expect float64 `json:"expect"`
@@ -115,9 +116,9 @@ func readTrialFile(path string) ([]trialRec, error) {
 // reason putting them side by side means anything.
 func reportLegs(byNode map[string][]trialRec, probed []trialRec) {
 	type agg struct {
-		windows, sent, got int
-		p50s, p99s, mdevs  []float64
-		expect             float64
+		windows, sent, got       int
+		p50s, p99s, maxes, mdevs []float64
+		expect                   float64
 	}
 	collect := func(recs []trialRec, longest string) map[string]*agg {
 		out := map[string]*agg{}
@@ -140,6 +141,7 @@ func reportLegs(byNode map[string][]trialRec, probed []trialRec) {
 			if r.N > 0 {
 				a.p50s = append(a.p50s, r.P50)
 				a.p99s = append(a.p99s, r.P99)
+				a.maxes = append(a.maxes, r.Max)
 				a.mdevs = append(a.mdevs, r.Mdev)
 			}
 		}
@@ -159,24 +161,28 @@ func reportLegs(byNode map[string][]trialRec, probed []trialRec) {
 		"leg", "windows", "p50", "p99", "worst", "mdev", "loss%", "expect", "vs expect")
 	for _, name := range sortedAggs(legs) {
 		a := legs[name]
-		printLeg(name, a.windows, a.sent, a.got, a.p50s, a.p99s, a.mdevs, a.expect)
+		printLeg(name, a.windows, a.sent, a.got, a.p50s, a.p99s, a.maxes, a.mdevs, a.expect)
 	}
 	if len(inc) > 0 {
 		fmt.Printf("\n%-24s %7s %8s %8s %8s %8s %8s\n",
 			"incumbent (probed)", "windows", "p50", "p99", "worst", "mdev", "loss%")
 		for _, name := range sortedAggs(inc) {
 			a := inc[name]
-			printLeg(name, a.windows, a.sent, a.got, a.p50s, a.p99s, a.mdevs, 0)
+			printLeg(name, a.windows, a.sent, a.got, a.p50s, a.p99s, a.maxes, a.mdevs, 0)
 		}
 	}
 	fmt.Println()
 }
 
-// printLeg is one row. p50 and p99 are the median across windows and worst is the
-// highest p99 any single window reported — a median and a maximum in one row would
-// otherwise sit under headings that do not say which is which, and the worst
-// window is exactly the one somebody reading this is looking for.
-func printLeg(name string, windows, sent, got int, p50s, p99s, mdevs []float64, expect float64) {
+// printLeg is one row. p50 and p99 are medians across windows; worst is the single
+// slowest round trip any window saw, and mdev the median deviation.
+//
+// worst is the whole sample rather than the highest p99 because p99 of a sixty
+// sample window is the second-worst of sixty, so one outlier sits above it and
+// never shows. Without worst in the row, that outlier appears only as an mdev
+// larger than the p99 beside it, which reads as impossible rather than as the one
+// spike it is.
+func printLeg(name string, windows, sent, got int, p50s, p99s, maxes, mdevs []float64, expect float64) {
 	loss := 0.0
 	if sent > 0 {
 		loss = 100 * float64(sent-got) / float64(sent)
@@ -185,7 +191,7 @@ func printLeg(name string, windows, sent, got int, p50s, p99s, mdevs []float64, 
 		fmt.Printf("%-24s %7d %8s %8s %8s %8s %8.2f\n", name, windows, "-", "-", "-", "-", loss)
 		return
 	}
-	p50, p99, hi, mdev := median(p50s), median(p99s), worst(p99s), median(mdevs)
+	p50, p99, hi, mdev := median(p50s), median(p99s), worst(maxes), median(mdevs)
 	if expect <= 0 {
 		fmt.Printf("%-24s %7d %8.2f %8.2f %8.2f %8.2f %8.2f\n", name, windows, p50, p99, hi, mdev, loss)
 		return
