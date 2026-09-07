@@ -155,14 +155,15 @@ func reportLegs(byNode map[string][]trialRec, probed []trialRec) {
 
 	fmt.Println("== legs")
 	fmt.Println("Round trips. mdev is the population standard deviation, as ping(8) reports it.")
-	fmt.Printf("\n%-24s %7s %8s %8s %8s %8s %8s %9s\n",
-		"leg", "windows", "p50", "p99", "mdev", "loss%", "expect", "vs expect")
+	fmt.Printf("\n%-24s %7s %8s %8s %8s %8s %8s %8s %9s\n",
+		"leg", "windows", "p50", "p99", "worst", "mdev", "loss%", "expect", "vs expect")
 	for _, name := range sortedAggs(legs) {
 		a := legs[name]
 		printLeg(name, a.windows, a.sent, a.got, a.p50s, a.p99s, a.mdevs, a.expect)
 	}
 	if len(inc) > 0 {
-		fmt.Printf("\n%-24s %7s %8s %8s %8s %8s\n", "incumbent (probed)", "windows", "p50", "p99", "mdev", "loss%")
+		fmt.Printf("\n%-24s %7s %8s %8s %8s %8s %8s\n",
+			"incumbent (probed)", "windows", "p50", "p99", "worst", "mdev", "loss%")
 		for _, name := range sortedAggs(inc) {
 			a := inc[name]
 			printLeg(name, a.windows, a.sent, a.got, a.p50s, a.p99s, a.mdevs, 0)
@@ -171,22 +172,26 @@ func reportLegs(byNode map[string][]trialRec, probed []trialRec) {
 	fmt.Println()
 }
 
+// printLeg is one row. p50 and p99 are the median across windows and worst is the
+// highest p99 any single window reported — a median and a maximum in one row would
+// otherwise sit under headings that do not say which is which, and the worst
+// window is exactly the one somebody reading this is looking for.
 func printLeg(name string, windows, sent, got int, p50s, p99s, mdevs []float64, expect float64) {
 	loss := 0.0
 	if sent > 0 {
 		loss = 100 * float64(sent-got) / float64(sent)
 	}
 	if len(p50s) == 0 {
-		fmt.Printf("%-24s %7d %8s %8s %8s %8.2f\n", name, windows, "-", "-", "-", loss)
+		fmt.Printf("%-24s %7d %8s %8s %8s %8s %8.2f\n", name, windows, "-", "-", "-", "-", loss)
 		return
 	}
-	p50, p99, mdev := median(p50s), worst(p99s), median(mdevs)
+	p50, p99, hi, mdev := median(p50s), median(p99s), worst(p99s), median(mdevs)
 	if expect <= 0 {
-		fmt.Printf("%-24s %7d %8.2f %8.2f %8.2f %8.2f\n", name, windows, p50, p99, mdev, loss)
+		fmt.Printf("%-24s %7d %8.2f %8.2f %8.2f %8.2f %8.2f\n", name, windows, p50, p99, hi, mdev, loss)
 		return
 	}
-	fmt.Printf("%-24s %7d %8.2f %8.2f %8.2f %8.2f %8.1f %+9.2f\n",
-		name, windows, p50, p99, mdev, loss, expect, p50-expect)
+	fmt.Printf("%-24s %7d %8.2f %8.2f %8.2f %8.2f %8.2f %8.1f %+9.2f\n",
+		name, windows, p50, p99, hi, mdev, loss, expect, p50-expect)
 }
 
 // reportRacing is the first half of the second question: when copies of one probe
@@ -198,40 +203,43 @@ func printLeg(name string, windows, sent, got int, p50s, p99s, mdevs []float64, 
 func reportRacing(nodes []string, byNode map[string][]trialRec) {
 	fmt.Println("== racing")
 	fmt.Println("Which route delivered a tick first, compared on the receiving node's own clock.")
+	fmt.Println("Grouped by the run a copy belongs to: two copies that started at different")
+	fmt.Println("nodes were never racing, and timing them against each other measures nothing.")
 	any := false
 	for _, node := range nodes {
-		byTick := arrivalsByTick(byNode[node])
-		wins := map[string]int{}
-		margins := map[string][]float64{}
-		races := 0
-		for _, as := range byTick {
-			if len(as) < 2 {
+		for _, run := range runsAt(byNode[node]) {
+			wins := map[string]int{}
+			margins := map[string][]float64{}
+			races := 0
+			for _, as := range arrivalsByTick(byNode[node], run) {
+				if len(as) < 2 {
+					continue
+				}
+				races++
+				sort.Slice(as, func(i, j int) bool { return as[i].T < as[j].T })
+				wins[as[0].Path]++
+				if d, ok := gapMS(as[0].T, as[1].T); ok {
+					margins[as[0].Path] = append(margins[as[0].Path], d)
+				}
+			}
+			if races == 0 {
 				continue
 			}
-			races++
-			sort.Slice(as, func(i, j int) bool { return as[i].T < as[j].T })
-			wins[as[0].Path]++
-			if d, ok := gapMS(as[0].T, as[1].T); ok {
-				margins[as[0].Path] = append(margins[as[0].Path], d)
+			any = true
+			fmt.Printf("\n%s, run from %s: %d ticks arrived by more than one route\n", node, run, races)
+			fmt.Printf("    %-34s %8s %8s %14s\n", "route", "wins", "win%", "median margin")
+			for _, p := range sortedCounts(wins) {
+				m := "-"
+				if len(margins[p]) > 0 {
+					m = fmt.Sprintf("%.3f ms", median(margins[p]))
+				}
+				fmt.Printf("    %-34s %8d %7.1f%% %14s\n", p, wins[p], 100*float64(wins[p])/float64(races), m)
 			}
-		}
-		if races == 0 {
-			continue
-		}
-		any = true
-		fmt.Printf("\n%s: %d ticks arrived by more than one route\n", node, races)
-		fmt.Printf("    %-34s %8s %8s %14s\n", "route", "wins", "win%", "median margin")
-		for _, p := range sortedCounts(wins) {
-			m := "-"
-			if len(margins[p]) > 0 {
-				m = fmt.Sprintf("%.3f ms", median(margins[p]))
-			}
-			fmt.Printf("    %-34s %8d %7.1f%% %14s\n", p, wins[p], 100*float64(wins[p])/float64(races), m)
 		}
 	}
 	if !any {
-		fmt.Println("\nNo node saw one tick arrive by two routes. Either the mesh is not flooding,")
-		fmt.Println("or nothing has been collected yet.")
+		fmt.Println("\nNo node saw one run's tick arrive by two routes. Either the mesh is not")
+		fmt.Println("flooding, or nothing has been collected yet.")
 	}
 	fmt.Println()
 }
@@ -250,9 +258,20 @@ func reportCorrelation(nodes []string, byNode map[string][]trialRec) {
 	fmt.Println("node's cost for no benefit.")
 
 	for _, node := range nodes {
-		byTick := arrivalsByTick(byNode[node])
+		for _, run := range runsAt(byNode[node]) {
+			reportRunIndependence(node, run, arrivalsByTick(byNode[node], run))
+		}
+	}
+	fmt.Println()
+}
+
+// reportRunIndependence takes one node's view of one run. Routes are only
+// alternatives to each other within a run; correlating a forward copy with a
+// return copy would be asking whether two different questions failed together.
+func reportRunIndependence(node, run string, byTick map[uint64][]trialRec) {
+	{
 		if len(byTick) == 0 {
-			continue
+			return
 		}
 		lo, hi := ^uint64(0), uint64(0)
 		paths := map[string]bool{}
@@ -263,7 +282,7 @@ func reportCorrelation(nodes []string, byNode map[string][]trialRec) {
 			}
 		}
 		if len(paths) < 2 {
-			continue
+			return
 		}
 		names := make([]string, 0, len(paths))
 		for p := range paths {
@@ -282,7 +301,7 @@ func reportCorrelation(nodes []string, byNode map[string][]trialRec) {
 			}
 		}
 
-		fmt.Printf("\n%s: %d ticks between first and last arrival\n", node, total)
+		fmt.Printf("\n%s, run from %s: %d ticks between first and last arrival\n", node, run, total)
 		fmt.Printf("    %-34s %10s %10s\n", "route", "delivered", "lost%")
 		lossy := false
 		for _, p := range names {
@@ -296,7 +315,7 @@ func reportCorrelation(nodes []string, byNode map[string][]trialRec) {
 			fmt.Println("    Every route delivered every tick. Independence cannot be assessed from")
 			fmt.Println("    a window with no failures in it - this is not evidence that they are")
 			fmt.Println("    independent, only that nothing has gone wrong yet.")
-			continue
+			return
 		}
 		fmt.Printf("\n    %-24s %-24s %8s %12s %12s\n", "route", "against", "phi", "both lost", "if independent")
 		for i := 0; i < len(names); i++ {
@@ -325,7 +344,6 @@ func reportCorrelation(nodes []string, byNode map[string][]trialRec) {
 			}
 		}
 	}
-	fmt.Println()
 }
 
 func reportTraces(nodes []string, byNode map[string][]trialRec) {
@@ -361,13 +379,39 @@ func reportTraces(nodes []string, byNode map[string][]trialRec) {
 	fmt.Println()
 }
 
-func arrivalsByTick(recs []trialRec) map[uint64][]trialRec {
+// arrivalsByTick indexes one run's arrivals. A run is named for the node that
+// started it, which is the first name in every path it produced.
+func arrivalsByTick(recs []trialRec, run string) map[uint64][]trialRec {
 	out := map[uint64][]trialRec{}
 	for _, r := range recs {
-		if r.K == "rx" {
+		if r.K == "rx" && originOf(r.Path) == run {
 			out[r.Tick] = append(out[r.Tick], r)
 		}
 	}
+	return out
+}
+
+func originOf(path string) string {
+	if i := strings.Index(path, ">"); i >= 0 {
+		return path[:i]
+	}
+	return path
+}
+
+// runsAt is every run this node has seen anything of, so each is reported on its
+// own rather than being mixed with the others.
+func runsAt(recs []trialRec) []string {
+	seen := map[string]bool{}
+	for _, r := range recs {
+		if r.K == "rx" {
+			seen[originOf(r.Path)] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for r := range seen {
+		out = append(out, r)
+	}
+	sort.Strings(out)
 	return out
 }
 

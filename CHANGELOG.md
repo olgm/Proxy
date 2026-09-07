@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- `proxyctl`: `trial report` now groups a race by the run a copy belongs to, and
+  separates the median p99 from the worst one. Running it against the live mesh is
+  what found both. It had been timing a copy that started at hk against one that
+  started at ch and calling the gap a margin — at ty-a that read as an echo probe
+  beating a chain packet by 79 ms, which is not a race and not a number. Two copies
+  are only alternatives to each other if they started in the same place. The same
+  fix applies to the independence table, where correlating a forward route with a
+  return one would be asking whether two different questions failed together.
+
+  And the p99 column held a maximum while p50 held a median, under headings that
+  did not say so. The worst window is worth having — it is the one a reader is
+  looking for — so it is its own column now rather than quietly displacing the
+  typical one.
+
 - `proxyctl`: a `trial` verb for the bake-off mesh — `config`, `deploy`, `status`,
   `pull`, `report`, `uninstall` — reading `trial.json` rather than the topology,
   because the nodes it asks about are the ones no route uses yet and requiring a
