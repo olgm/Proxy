@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- `internal/window`: the windowed aggregation and its percentiles, moved out of
+  `internal/probe` so that a second measurement service can put its numbers beside
+  probed's and have the comparison mean something. Two copies of a percentile drift
+  apart the moment one of them is touched, and the whole point of a bake-off is that
+  the candidate and the incumbent were measured the same way. `probe.Report` keeps
+  its flat shape and its fields are copied out of `window.Closed` rather than
+  embedded, so the dataset on disk did not move by one byte — the existing probe
+  tests passing unchanged is what says so. The two rules that were hard-won stay
+  with the arithmetic: a sample is filed under the time it was sent, and a window is
+  not closed until one probe timeout after it ends.
+
 - `proxybot`: `/watch user:@x`, managers only and always private. It shows the
   accounts that member owns, the sessions they have open and on which entry, and a
   page of five finished sessions with a button for the next — each with the IGN,

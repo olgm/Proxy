@@ -11,6 +11,7 @@ import (
 
 	"github.com/olgm/proxy/internal/jsonl"
 	"github.com/olgm/proxy/internal/tunnel"
+	"github.com/olgm/proxy/internal/window"
 )
 
 // Node is this machine's part of the measurement. What it does for each class
@@ -111,7 +112,7 @@ type class struct {
 	// Originator state.
 	seq    uint64
 	out    map[uint64]time.Time
-	series []*series
+	series []*window.Series
 }
 
 func (c *class) originates() bool { return len(c.up) == 0 && len(c.down) > 0 }
@@ -210,7 +211,7 @@ func New(cfg Config) (*Node, error) {
 		}
 		if c.originates() {
 			for _, d := range windows {
-				c.series = append(c.series, newSeries(d))
+				c.series = append(c.series, window.NewSeries(d))
 			}
 		}
 		n.classes[cc.ID] = c
@@ -385,7 +386,7 @@ func (c *class) expire(now time.Time) {
 	}
 	for _, at := range lost {
 		for _, s := range c.series {
-			s.add(sample{at: at, lost: true})
+			s.Add(window.Sample{At: at, Lost: true})
 		}
 	}
 	c.mu.Unlock()
@@ -398,8 +399,9 @@ func (c *class) flush(now time.Time) {
 	c.mu.Lock()
 	var out []*Report
 	for _, s := range c.series {
-		for _, i := range s.due(now, c.n.timeout) {
-			if r := s.flush(i); r != nil {
+		for _, i := range s.Due(now, c.n.timeout) {
+			if cw := s.Flush(i); cw != nil {
+				r := report(cw)
 				r.Class, r.Kind, r.Dup = c.Name, c.Kind, c.Duplicate
 				out = append(out, r)
 			}
@@ -491,7 +493,7 @@ func (c *class) answer(p packet) {
 	}
 	delete(c.out, p.seq)
 	for _, s := range c.series {
-		s.add(sample{at: at, rtt: now.Sub(at), recv: p.recv})
+		s.Add(window.Sample{At: at, RTT: now.Sub(at), Recv: p.recv})
 	}
 }
 
