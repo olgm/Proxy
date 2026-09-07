@@ -3,6 +3,8 @@ CLAUDE.md
 agents/
 reference/
 topology.json
+trial.json
+trial-data/
 tunnel-keys.json
 whitelist.txt
 whitelist.txt.refreshed

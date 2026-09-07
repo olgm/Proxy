@@ -93,6 +93,12 @@ type Trace struct {
 	TimeoutS  int     `json:"timeout_s,omitempty"`
 }
 
+// Validate reports whether triald would accept this config, without binding a
+// socket or making a state directory. proxyctl checks what it generated before it
+// uploads it: the alternative is finding out from six nodes that all failed to
+// start at once. It takes a copy, so applying defaults cannot surprise the caller.
+func Validate(c Config) error { return c.fill() }
+
 func (c *Config) fill() error {
 	if c.Name == "" {
 		return fmt.Errorf("trial: name is required")

@@ -308,6 +308,7 @@ func main() {
 	fs := flag.NewFlagSet("proxyctl", flag.ExitOnError)
 	file := fs.String("f", "topology.json", "topology file")
 	repo := fs.String("C", ".", "repository root to build proxyd from")
+	mesh := fs.String("t", trialFileName, "trial mesh file, for the trial command")
 	fs.Usage = usage
 
 	if len(os.Args) < 2 {
@@ -316,6 +317,14 @@ func main() {
 	}
 	cmd := os.Args[1]
 	fs.Parse(os.Args[2:])
+
+	// The trial mesh has its own file and does not need the topology loaded: its
+	// nodes are the ones no route uses yet, which is the whole reason it exists.
+	// Requiring a valid topology to ask about them would be backwards.
+	if cmd == "trial" {
+		fail(trialCmd(*mesh, *repo, fs.Args()))
+		return
+	}
 
 	t, err := load(*file)
 	fail(err)
@@ -361,6 +370,9 @@ func usage() {
              and the whitelist)
   whitelist  list | add <name> [uuid] | remove <name|uuid>
              on every entry that holds a whitelist, over ssh
+  trial      config | deploy | status | pull | report | uninstall
+             the bake-off mesh from trial.json, for legs no route uses yet.
+             Separate from everything above and temporary; see agents/trial.md
 
 A route with "transport": "udp" needs one key per leg, and every entry with a
 whitelist one key for its control link. They are minted on the first deploy into

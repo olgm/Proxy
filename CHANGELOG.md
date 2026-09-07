@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- `proxyctl`: a `trial` verb for the bake-off mesh — `config`, `deploy`, `status`,
+  `pull`, `report`, `uninstall` — reading `trial.json` rather than the topology,
+  because the nodes it asks about are the ones no route uses yet and requiring a
+  valid topology to ask would be backwards. Keys come from a `trial|` namespace of
+  their own: these are the set most likely to end up on a machine we have had for a
+  day and are not sure about, and holding them must not be a way into anything else.
+
+  Two things are worked out rather than written down, so they cannot disagree with
+  the mesh. Which legs a node holds follows from the legs it appears in. And a leg
+  no run crosses is probed on its own — everywhere else a run's own packets are the
+  leg's measurement, which is the point of building it this way. The expansion is
+  then run through triald's own validation before anything is uploaded, because the
+  alternative is learning from six nodes that all failed to start at once.
+
+  `status` reports which legs are carrying and prints the `ufw` rule for any that
+  are not, without applying it. `pull` fetches every node's dataset and probed's
+  beside it, since the first question is how a candidate compares with the leg it
+  would replace and probed is the only thing measuring the latter. `report` prints
+  the leg comparison, the race win rates with their margins, and whether two routes
+  lose the same ticks — and says plainly when nothing has failed yet, rather than
+  reporting an independence it has no evidence for.
+
 - `internal/trial`, `triald`: a bake-off harness for candidate nodes, beside probed
   and never instead of it. probed measures the production path and may not be
   pointed off it; every leg here is one no route uses, because the question is
