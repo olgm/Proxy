@@ -1420,7 +1420,13 @@ func envFile(path, group, body string) string {
 	if body == "" {
 		return "$SUDO rm -f " + path
 	}
-	return "$SUDO install -m 0640 -o root -g " + group + " /dev/stdin " + path + " <<'FEEDENV'\n" + body + "FEEDENV"
+	// Removed before it is written, because install(1) is not uniform across the
+	// fleet: ty runs uutils coreutils, whose install fails to overwrite an
+	// existing file from /dev/stdin where GNU's replaces it. Creating is the one
+	// path both agree on. Without this a node deploys once and then refuses every
+	// deploy after it, which is worse than failing the first time.
+	return "$SUDO rm -f " + path + "\n" +
+		"$SUDO install -m 0640 -o root -g " + group + " /dev/stdin " + path + " <<'FEEDENV'\n" + body + "FEEDENV"
 }
 
 // installBotScript installs proxybot beside proxyd. The token travels inside

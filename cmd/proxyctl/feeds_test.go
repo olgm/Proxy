@@ -104,6 +104,11 @@ func TestEnvFileRemovesWhenThereIsNoFeed(t *testing.T) {
 	if !strings.Contains(got, "install -m 0640 -o root -g \"$USER\" /dev/stdin /etc/proxyd/feeds.env <<'FEEDENV'\nK=v\nFEEDENV") {
 		t.Fatalf("feed file not written root-owned:\n%s", got)
 	}
+	// The remove has to come first, and has to be there: uutils install cannot
+	// overwrite from /dev/stdin, so without it ty deploys once and never again.
+	if !strings.HasPrefix(got, "$SUDO rm -f /etc/proxyd/feeds.env\n$SUDO install ") {
+		t.Fatalf("feed file not removed before it is written:\n%s", got)
+	}
 }
 
 // The URL travels inside the script over ssh stdin, never on a command line and
