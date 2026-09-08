@@ -19,7 +19,7 @@ import "runtime/debug"
 // the current system v2 (v1 is minecraftspeedproxy, still holding 25565 on CH),
 // and 2.0.0 was announced in Discord before any of this existed, so the
 // numbering continues after that rather than starting at 0.1.0.
-const V = "2.1.0"
+const V = "2.1.1"
 
 // String renders the version with the revision it was built from: "v2.1.0
 // (733d62d)", or "v2.1.0 (733d62d, dirty)" when the tree had uncommitted changes

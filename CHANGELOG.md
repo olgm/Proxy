@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.1.1 — 2026-09-08
+
+- `proxyctl`: a feed's env file is removed before it is written. `install(1)` is not
+  the same program on every node — ty runs uutils coreutils, whose `install` fails to
+  overwrite an existing file from `/dev/stdin` where GNU's replaces it — so writing
+  `feeds.env` succeeded the first time a node was deployed and failed every time
+  after, with a bare `install: No such file or directory` that names neither the file
+  nor the node. Creating is the one path both implementations agree on.
+
+  Found by deploying v2.1.0: three nodes took it and ty refused, having last been
+  deployed when the file did not yet exist. The same call writes probed's env file,
+  so ty would have refused that too.
+
 ## v2.1.0 — 2026-09-08
 
 - Everything here now ships under one version, in `internal/version`, reported by
