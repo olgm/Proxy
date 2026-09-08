@@ -6,17 +6,25 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"time"
 
 	"github.com/olgm/proxy/internal/botcfg"
+	"github.com/olgm/proxy/internal/version"
 )
 
 func main() {
 	path := flag.String("c", "/etc/proxyd/bot.json", "bot config")
+	ver := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+	if *ver {
+		fmt.Println(version.String())
+		return
+	}
 	log.SetFlags(log.LstdFlags | log.LUTC)
+	log.Printf("proxybot %s", version.String())
 
 	cfg, err := botcfg.Load(*path)
 	if err != nil {

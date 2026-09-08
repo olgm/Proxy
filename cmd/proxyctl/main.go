@@ -23,6 +23,7 @@ import (
 	"github.com/olgm/proxy/internal/botcfg"
 	"github.com/olgm/proxy/internal/probe"
 	"github.com/olgm/proxy/internal/proxy"
+	"github.com/olgm/proxy/internal/version"
 )
 
 type Topology struct {
@@ -318,6 +319,13 @@ func main() {
 	cmd := os.Args[1]
 	fs.Parse(os.Args[2:])
 
+	// This needs no topology, and requiring a valid one to ask what version this
+	// is would be backwards.
+	if cmd == "version" {
+		fmt.Println(version.String())
+		return
+	}
+
 	// The trial mesh has its own file and does not need the topology loaded: its
 	// nodes are the ones no route uses yet, which is the whole reason it exists.
 	// Requiring a valid topology to ask about them would be backwards.
@@ -368,6 +376,7 @@ func usage() {
   status     report each node's service state, listening sockets and tunnel links
   uninstall  stop and remove the service, binary and config (leaves the account
              and the whitelist)
+  version    print the version every binary here ships under
   whitelist  list | add <name> [uuid] | remove <name|uuid>
              on every entry that holds a whitelist, over ssh
   trial      config | deploy [node...] | status | pull | report | uninstall

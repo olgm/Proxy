@@ -23,12 +23,19 @@ import (
 	"syscall"
 
 	"github.com/olgm/proxy/internal/trial"
+	"github.com/olgm/proxy/internal/version"
 )
 
 func main() {
 	path := flag.String("c", "/etc/triald/config.json", "config file")
+	ver := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+	if *ver {
+		fmt.Println(version.String())
+		return
+	}
 	log.SetFlags(log.LstdFlags | log.LUTC)
+	log.Printf("triald %s", version.String())
 
 	cfg, err := readConfig(*path)
 	if err != nil {

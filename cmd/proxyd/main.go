@@ -13,6 +13,7 @@ import (
 	"os"
 
 	"github.com/olgm/proxy/internal/proxy"
+	"github.com/olgm/proxy/internal/version"
 )
 
 func main() {
@@ -21,8 +22,16 @@ func main() {
 		return
 	}
 	path := flag.String("c", "/etc/proxyd/config.json", "config file")
+	ver := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+	if *ver {
+		fmt.Println(version.String())
+		return
+	}
 	log.SetFlags(log.LstdFlags | log.LUTC)
+	// First, before the config is even read: a node that fails to start still has
+	// to be able to say which build failed.
+	log.Printf("proxyd %s", version.String())
 
 	cfg, err := readConfig(*path)
 	if err != nil {
