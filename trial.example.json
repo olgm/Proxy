@@ -28,7 +28,9 @@
     {"a": "ty-b", "b": "ty-c",    "expect_ms": 1},
     {"a": "ty-b", "b": "ch",        "expect_ms": 128},
     {"a": "ty-c",    "b": "ch",        "expect_ms": 130},
-    {"a": "ty-a",     "b": "ty-d",    "expect_ms": 1}
+    {"a": "ty-a",     "b": "ty-d",    "expect_ms": 1},
+    {"a": "ty-d",    "b": "ty-c",    "expect_ms": 1},
+    {"a": "ty-d",    "b": "ty-b", "expect_ms": 1}
   ],
 
   "runs": [

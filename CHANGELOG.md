@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- `trial.example.json`: ty-d↔ty-c and ty-d↔ty-b added to the mesh. The
+  brief named ty-d in one leg only, so those two were never polled — and they turn
+  out to be the ones the second question rests on. Both handoffs from the incumbent
+  to a candidate transit GSL (`AS142616 → AS969 → AS137409 → AS7578 → the
+  candidate`), which is the single carrier the racing exercise exists to escape: a
+  GSL failure would take out the incumbent and the path to its own backup together.
+  The one ty-d leg that was already polled, ty-a, is the one that reaches Equinix
+  without touching GSL. So the mesh was continuously measuring the only handoff that
+  might be independent and neither of the two that provably are not.
+
+  A ten-minute traceroute cannot see a path that flaps; continuous polling with the
+  trace trigger can.
+
 - `proxyctl`: `trial report`'s worst column is the slowest single round trip a
   window saw, not the highest p99 it reported. p99 of a sixty-sample window is the
   second-worst of sixty, so one outlier sits above it and never appears — and then
