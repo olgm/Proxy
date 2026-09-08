@@ -40,7 +40,7 @@ go run ./cmd/proxyctl status
 go run ./cmd/proxyctl whitelist list       # once deployed: manage the list from here
 ```
 
-Commands: `config`, `deploy`, `status`, `uninstall`, `whitelist`. The Discord bot
+Commands: `config`, `deploy`, `status`, `uninstall`, `version`, `whitelist`. The Discord bot
 needs one more thing before `deploy`; see "Discord bot" below.
 
 ## topology.json
@@ -997,6 +997,43 @@ The data plane is public IPv4, never the Tailscale addresses — production runs
 public IPv4, and the overlay would hide the carrier diversity the trial is about.
 The unit needs `AmbientCapabilities=CAP_NET_RAW`: `NoNewPrivileges` disables
 `mtr-packet`'s file capability, and without it every traceroute fails.
+
+## Version
+
+One version for the whole repo, in `internal/version`. Every binary reports the same
+one:
+
+```sh
+go run ./cmd/proxyctl version
+/usr/local/bin/proxyd -version     # on a node; likewise probed, triald, proxybot
+```
+
+```
+v2.1.0 (733d62d)
+```
+
+The number is what a release is called. The revision beside it is the commit the
+binary was built from, which `go build` stamps in by itself — nothing here sets it.
+The two answer different questions: the number is what was announced, the revision is
+what actually shipped, and only the second can tell you whether the binary on a node
+is the code in your tree. A trailing `, dirty` means the tree had uncommitted changes
+when it was built. `go run` does not stamp a revision, so `go run ./cmd/proxyctl
+version` prints a bare `v2.1.0`; a built binary carries both.
+
+`proxyctl status` asks every installed binary its version and prints it in each
+node's heading. All of it is built from one tree by one deploy, so they should agree;
+when they do not, the report ends with a `version skew` block naming which node is on
+what. That is the case worth catching — a node deployed by hand, or missed by the
+last deploy and still carrying the build before it.
+
+There is no per-binary version. proxyd, proxybot, probed and triald share
+`internal/tunnel`, `internal/control`, `internal/probe` and `internal/window`, so a
+change to any of those moves several of them at once; separate numbers would be four
+values cut from one commit that could only ever agree, kept by hand.
+
+To cut a release: bump `V` in `internal/version/version.go`, retitle the changelog's
+top section from `Unreleased` to the new number, commit, and tag that commit
+`vX.Y.Z`.
 
 ## Logs
 

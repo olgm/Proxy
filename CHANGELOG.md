@@ -1,6 +1,26 @@
 # Changelog
 
-## Unreleased
+## v2.1.0 — 2026-09-08
+
+- Everything here now ships under one version, in `internal/version`, reported by
+  `proxyctl version` and by `-version` on proxyd, proxybot, probed and triald. It is
+  one number for the repo rather than one per binary: the four daemons share
+  `internal/tunnel`, `internal/control`, `internal/probe` and `internal/window`, so
+  separate numbers would be four values cut from one commit that could only ever
+  agree, maintained by hand.
+
+  A hand-bumped constant says what a release is called and nothing about what is on
+  a node — twenty-one commits reached the fleet under no version at all — so each
+  binary also prints the commit it was built from, which `go build` stamps in on its
+  own and which survives the `-trimpath` proxyctl builds with. `proxyctl status`
+  reads that back off every installed binary, prints it in each node's heading, and
+  ends with a `version skew` block when they disagree. Nothing else here can see a
+  node deployed by hand or missed by the last deploy.
+
+  Numbering starts at 2.1.0: v2 is what the README and the server list have called
+  this system since v1 (minecraftspeedproxy, still holding 25565 on CH), and 2.0.0
+  was announced in Discord before any of this existed. It was never tagged and has
+  no entry here; the entries below it are this release.
 
 - `trial.example.json`: ty-d↔ty-c and ty-d↔ty-b added to the mesh. The
   brief named ty-d in one leg only, so those two were never polled — and they turn
