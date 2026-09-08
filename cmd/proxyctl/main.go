@@ -1492,44 +1492,106 @@ $SUDO systemctl is-active proxybot
 }
 
 func status(t *Topology) error {
+	// What each binary answers when asked its own version, keyed by where it runs.
+	// Collected across every service because they all ship from one tree and one
+	// deploy, so any disagreement is skew. See skew below.
+	running := map[string]string{}
+
 	for _, name := range sortedNodes(t) {
 		node := t.Nodes[name]
 		// The newest line per tunnel link, keyed on the address after "link" rather
 		// than on a field number, because journald's own prefix would shift those.
 		// A restart clears the set: proxyd logs its listeners first, so links that
 		// only existed under an older config do not linger in the report.
-		out, _ := ssh(node.SSH, `systemctl is-active proxyd 2>&1 || true
+		out, _ := ssh(node.SSH, versionLine("proxyd")+`
+systemctl is-active proxyd 2>&1 || true
 ss -lntup 2>/dev/null | grep proxyd || echo "  (no listening sockets)"
 journalctl -u proxyd -n 400 --no-pager -o cat 2>/dev/null |
   awk '/ listen /{delete last}
        / link /{for(i=1;i<=NF;i++) if($i=="link"){last[$(i+1)]=$0}}
        END{for(k in last) print last[k]}' |
   sort || true`)
-		fmt.Printf("== %s (%s)\n%s\n", name, node.Addr, indent(string(out)))
+		ver, rest := splitVersion(out)
+		running[name+" proxyd"] = ver
+		fmt.Printf("== %s (%s) %s\n%s\n", name, node.Addr, ver, indent(rest))
 	}
 	if t.Probe != nil {
 		for _, name := range sortedNodes(t) {
 			// The newest line per class, keyed on the class name, so a leg
 			// measured at two counts reports both.
-			out, _ := ssh(t.Nodes[name].SSH, `systemctl is-active probed 2>&1 | grep -q '^active' || exit 0
+			out, _ := ssh(t.Nodes[name].SSH, versionLine("probed")+`
+systemctl is-active probed 2>&1 | grep -q '^active' || exit 0
 journalctl -u probed -n 400 --no-pager -o cat 2>/dev/null |
   awk '/ probe /{for(i=1;i<=NF;i++) if($i=="probe"){last[$(i+1)" "$(i+2)" "$(i+3)]=$0}}
        END{for(k in last) print last[k]}' |
   sort || true`)
-			if len(strings.TrimSpace(string(out))) == 0 {
+			ver, rest := splitVersion(out)
+			if len(strings.TrimSpace(rest)) == 0 {
 				continue
 			}
-			fmt.Printf("== %s probe\n%s\n", name, indent(string(out)))
+			running[name+" probed"] = ver
+			fmt.Printf("== %s probe %s\n%s\n", name, ver, indent(rest))
 		}
 	}
 	if t.Discord != nil {
 		name := t.botNode()
-		out, _ := ssh(t.Nodes[name].SSH, `systemctl is-active proxybot 2>&1 || true
+		out, _ := ssh(t.Nodes[name].SSH, versionLine("proxybot")+`
+systemctl is-active proxybot 2>&1 || true
 journalctl -u proxybot -n 300 --no-pager -o cat 2>/dev/null |
   grep -E '^(discord|reconcile|audit|prune):|DISCORD_BOT_TOKEN' | tail -3 || true`)
-		fmt.Printf("== %s bot\n%s\n", name, indent(string(out)))
+		ver, rest := splitVersion(out)
+		running[name+" proxybot"] = ver
+		fmt.Printf("== %s bot %s\n%s\n", name, ver, indent(rest))
 	}
+	skew(running)
 	return nil
+}
+
+// versionLine asks an installed binary what it is, as the first line of a status
+// script. Both ways of not getting an answer are answers themselves and neither
+// may fail the script, because the rest of the report is still worth having: a
+// binary that is absent has never been deployed, and one that rejects -version
+// predates it, which is every node until the first deploy after this.
+func versionLine(bin string) string {
+	p := "/usr/local/bin/" + bin
+	return "if [ -x " + p + " ]; then " + p +
+		` -version 2>/dev/null || echo "(pre-version build)"; else echo "(not installed)"; fi`
+}
+
+// splitVersion peels that first line back off, leaving the rest of the output to
+// be printed as it always was.
+func splitVersion(out []byte) (ver, rest string) {
+	s := string(out)
+	i := strings.IndexByte(s, '\n')
+	if i < 0 {
+		return strings.TrimSpace(s), ""
+	}
+	return strings.TrimSpace(s[:i]), s[i+1:]
+}
+
+// skew reports binaries that disagree about what they are. Everything here is
+// built from one tree by one deploy, so they should not: a second answer means a
+// node was deployed by hand, or missed by the last deploy and still carrying the
+// previous build. Silent when they agree — the versions are already printed above.
+func skew(running map[string]string) {
+	where := map[string][]string{}
+	for w, v := range running {
+		where[v] = append(where[v], w)
+	}
+	if len(where) < 2 {
+		return
+	}
+	vers := make([]string, 0, len(where))
+	for v := range where {
+		vers = append(vers, v)
+	}
+	sort.Strings(vers)
+	fmt.Println("== version skew")
+	for _, v := range vers {
+		sort.Strings(where[v])
+		fmt.Printf("   %-28s %s\n", v, strings.Join(where[v], ", "))
+	}
+	fmt.Println()
 }
 
 func uninstall(t *Topology) error {
