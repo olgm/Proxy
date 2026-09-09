@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- A session line reports `chain` as bytes and nothing else. v2.2.0 put the
+  multiple over payload beside it, which is a ratio where the useful quantity is
+  a figure to add up across a month against what the boxes allow. Anyone who
+  wants the multiple has `up`, `down` and `chain` on the same line.
+
 ## v2.2.0 — 2026-09-09
 
 The sessions feed reported six things wrongly and lost a seventh outright. All of

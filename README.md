@@ -474,7 +474,7 @@ the next:
 `Notch` on **hk** from `203.0.113.9` · 12m
 
 **Sessions** — page 1
-`Notch` **hk** `203.0.113.9` · 5 Sep 11:00 → 11:42 (42m) · up 4.1MB down 51.7MB · chain 111.6MB ×2.0
+`Notch` **hk** `203.0.113.9` · 5 Sep 11:00 → 11:42 (42m) · up 4.1MB down 51.7MB · chain 111.6MB
 ```
 
 **This is the one place the client IP is reported**, and why the command is
@@ -557,7 +557,7 @@ One line when a player logs in and one when they log out:
 
 ```
 **hk** `Notch` joined `069a79f4-44e9-4726-a5be-fca90e38aaf5` · online 2
-**hk** `Notch` left · 42m18s · up 4.1MB down 51.7MB · chain 111.6MB ×2.0 · online 1
+**hk** `Notch` left · 42m18s · up 4.1MB down 51.7MB · chain 111.6MB · online 1
 ```
 
 `online` is that node's own count, not the fleet's. A node knows its own sessions
@@ -571,13 +571,17 @@ and the roster another, each right about a different question.
 
 `up` and `down` are payload: what the session carried, each way. `chain` is what
 carrying it cost the fleet in traffic a VPS bills for — every byte in or out of
-every node that touched it — with the multiple over payload beside it.
+every node that touched it. All three are bytes, and nothing here is a ratio: the
+figure is meant to be added up across a month against what the boxes allow, and
+how many times the payload it happens to be is arithmetic a reader can do when
+they want it.
 
 A byte crossing a tunnel leg is billed twice, once leaving one node and once
 arriving at the next, and the two ends of the chain are billed once each, where
-the far side is a player or the backend. So a direct exit is exactly `×2.0`, which
-is the floor, and every duplicated leg adds to it. The figure is the only way to
-see what a `duplicate` setting is actually buying.
+the far side is a player or the backend. So a session over a direct exit costs
+exactly twice its payload, which is the floor, and every duplicated leg adds to
+it. Comparing `chain` against `up` plus `down` is the only way to see what a
+`duplicate` setting is actually buying.
 
 Each node measures its own leg exactly — duplicates, re-sends, and the acks and
 nacks that repair them. The legs past it are reckoned to cost the same, which
