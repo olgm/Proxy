@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v2.2.1 — 2026-09-09
 
 - A session line reports `chain` as bytes and nothing else. v2.2.0 put the
   multiple over payload beside it, which is a ratio where the useful quantity is
