@@ -188,6 +188,8 @@ type server struct {
 	// online is the count of logins currently being relayed, which is the number
 	// the MOTD reports and the only live state this node keeps about a session.
 	online atomic.Int64
+	// countMu orders online against the feed line that reports it.
+	countMu sync.Mutex
 	// node and feed are the session feed: what this node is called, and where a
 	// login and a logout are posted. feed is nil unless one was configured.
 	node string
@@ -761,6 +763,7 @@ func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake) {
 		Node: s.node, IP: ip, Name: name, UUID: uuid,
 		Proto: int(h.ProtocolVersion), Start: time.Now(),
 	}
+	s.countMu.Lock()
 	sess.Online = s.online.Add(1)
 	// Both sides, so a shutdown unblocks the download direction too. The client
 	// going quiet is not enough to end a relay Hypixel is still writing to.
@@ -771,18 +774,24 @@ func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake) {
 	defer s.live.done()
 	log.Printf("%s: login %s name=%q uuid=%q proto=%d online=%d", s.Bind, ip, name, uuid, h.ProtocolVersion, sess.Online)
 	s.feed.login(sess)
+	s.countMu.Unlock()
 
 	up, down := relay(c, u)
 
 	s.live.remove(id)
 
 	sess.End, sess.Up, sess.Down, sess.Wire = time.Now(), up, down, wireOf(u)
-	sess.Online = s.online.Add(-1)
 	s.live.record(sess)
+	// The count and the line that reports it, together. They are two steps, and
+	// two sessions ending at once would otherwise be able to print their counts
+	// in the opposite order to the counting.
+	s.countMu.Lock()
+	sess.Online = s.online.Add(-1)
 	log.Printf("%s: logout %s name=%q uuid=%q for %s up=%s down=%s%s online=%d",
 		s.Bind, ip, name, uuid, sess.For(),
 		size(up), size(down), wireCost(u, up+down), sess.Online)
 	s.feed.logout(sess)
+	s.countMu.Unlock()
 }
 
 // wireCost reports what the tunnel actually spent carrying a session, and how much
