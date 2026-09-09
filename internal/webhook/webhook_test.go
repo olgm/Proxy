@@ -241,3 +241,49 @@ func TestCloseFlushesWhatWasQueued(t *testing.T) {
 		t.Fatalf("close did not flush the queue: %+v", all)
 	}
 }
+
+// A drop that happens while nothing else is queued still has to be reported. The
+// note used to be attached only to a message that was going out anyway, so a
+// drop with nothing left to carry it — the sender was busy, everything it had
+// was already posted, and the lines turned away were the last of them — took the
+// count away with it. The feed then looked quiet rather than incomplete.
+func TestADropIsReportedEvenWithNothingElseToSay(t *testing.T) {
+	c, url := newCapture(t)
+	q := NewQueue(url, 4, 5*time.Millisecond)
+	q.drops.Add(7)
+	q.Close()
+
+	var all []string
+	for _, p := range c.sent() {
+		all = append(all, p.Content)
+	}
+	joined := strings.Join(all, "\n")
+	if !strings.Contains(joined, "did not fit") || !strings.Contains(joined, "7") {
+		t.Fatalf("seven dropped lines went unreported: %q", joined)
+	}
+}
+
+// A queue that is filling up posts early rather than sitting on its timer until
+// it overflows. The room only ever runs short because the sender was slow to use
+// it, and a line dropped for want of room is a login nobody will see reported.
+func TestAFillingQueuePostsBeforeItOverflows(t *testing.T) {
+	c, url := newCapture(t)
+
+	// A flush interval far longer than the test: anything that goes out went out
+	// because the queue was filling, not because the timer fired.
+	q := NewQueue(url, 8, time.Hour)
+	for i := 0; i < 8; i++ {
+		q.Send("line")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for len(c.sent()) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("a filling queue waited for its timer instead of posting")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	q.Close()
+	if q.drops.Load() != 0 {
+		t.Errorf("%d lines were dropped by a queue that had room to post", q.drops.Load())
+	}
+}

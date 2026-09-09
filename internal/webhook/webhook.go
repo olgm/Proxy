@@ -193,10 +193,11 @@ type Queue struct {
 	once  sync.Once
 }
 
-// NewQueue starts a queue. depth is how many lines may wait; past it the oldest
-// are dropped and the count is reported in the next message, because a feed that
-// blocks a login is worse than a feed with a hole in it. flush is how long lines
-// are gathered before one message goes out.
+// NewQueue starts a queue. depth is how many lines may wait; past it a new line
+// is dropped and counted, and the count is reported, because a feed that blocks
+// a login is worse than a feed with a hole in it. flush is how long lines are
+// gathered before one message goes out — at most, since a queue that is filling
+// up posts early rather than waiting for the timer and losing the overflow.
 func NewQueue(url string, depth int, flush time.Duration) *Queue {
 	q := &Queue{
 		c: New(url), in: make(chan string, depth),
@@ -245,11 +246,16 @@ func (q *Queue) run(flush time.Duration) {
 	var buf []string
 	n := 0
 	send := func() {
-		if len(buf) == 0 {
-			return
-		}
+		// Before the empty check, not after it. A drop is most likely when the
+		// sender was stuck on a slow post and everything queued behind it was
+		// turned away, which is exactly the case that leaves nothing else to
+		// carry the note — and the one where nobody must be left thinking the
+		// feed was simply quiet.
 		if d := q.drops.Swap(0); d > 0 {
 			buf = append(buf, fmt.Sprintf("_...and %d more that did not fit_", d))
+		}
+		if len(buf) == 0 {
+			return
 		}
 		if _, err := q.c.Post(strings.Join(buf, "\n")); err != nil {
 			log.Printf("%v", err)
@@ -267,6 +273,13 @@ func (q *Queue) run(flush time.Duration) {
 		select {
 		case line := <-q.in:
 			take(line)
+			// Post early while the queue is filling instead of sitting on the
+			// timer until it overflows. A line dropped for want of room is a
+			// login or a logout nobody will ever see reported, and the room is
+			// only ever short because this loop was slow to empty it.
+			if len(q.in) >= cap(q.in)/2 {
+				send()
+			}
 		case <-t.C:
 			send()
 		case <-q.stop:
