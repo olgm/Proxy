@@ -91,20 +91,23 @@ func (l *Link) sample(r time.Duration) {
 	l.srtt = (7*l.srtt + r) / 8
 }
 
-// send writes n independently sealed copies. Sealing each copy separately is not
-// waste: identical bytes would look like a replay to the far end and the second
-// copy would be discarded, which is exactly what duplication must not do.
-func (l *Link) send(plain []byte, n int, rtx bool) {
+// send writes n independently sealed copies and reports how many bytes it put on
+// the socket, which is what the leg is billed for. Sealing each copy separately
+// is not waste: identical bytes would look like a replay to the far end and the
+// second copy would be discarded, which is exactly what duplication must not do.
+func (l *Link) send(plain []byte, n int, rtx bool) int {
 	to := l.remote.Load()
 	if to == nil {
-		return // a peer that has never spoken has no address to answer at
+		return 0 // a peer that has never spoken has no address to answer at
 	}
+	wrote := 0
 	for i := 0; i < n; i++ {
 		buf := l.seal.Seal(make([]byte, 0, NonceLen+len(plain)+GCMOverhead), plain)
 		if _, err := l.sock.conn.WriteToUDP(buf, to); err != nil {
 			l.count(func(s *linkStats) { s.dropped++ })
-			return
+			return wrote
 		}
+		wrote += len(buf)
 		l.count(func(s *linkStats) {
 			s.sent++
 			if rtx {
@@ -112,6 +115,7 @@ func (l *Link) send(plain []byte, n int, rtx bool) {
 			}
 		})
 	}
+	return wrote
 }
 
 func (l *Link) count(f func(*linkStats)) {
@@ -239,6 +243,8 @@ func (s *socket) read() {
 			l.remote.Store(from)
 		}
 		l.count(func(st *linkStats) { st.recv++ })
-		s.node.handle(l, p)
+		// n, not len(out): the socket carried the sealed datagram, and the seal
+		// is as billable as what it wraps.
+		s.node.handle(l, p, n)
 	}
 }

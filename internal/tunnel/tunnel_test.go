@@ -631,7 +631,7 @@ func TestWireCountsEveryCopy(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		wire := float64(s.Wire())
+		wire := float64(s.Traffic().Sent)
 		ratio := wire / body
 		// Framing and the AEAD tag put it a little over the multiple, and a lost
 		// datagram would put it further over. Under it would mean copies going
@@ -640,18 +640,25 @@ func TestWireCountsEveryCopy(t *testing.T) {
 			t.Errorf("dup %d: wire %.0f for %d payload is x%.2f, want about x%d",
 				dup, wire, body, ratio, dup)
 		}
+		// Both ends of a leg are billed, and a duplicate costs the receiver as
+		// much as the sender: the exit pays for every copy that arrives, not for
+		// the one chunk it keeps. Counting only what a node sent priced a session
+		// at a fraction of what carrying it actually cost.
+		if got, want := float64(es.Traffic().Recv), float64(dup)*body; got < want {
+			t.Errorf("dup %d: the exit was billed %.0f for %.0f arriving", dup, got, want)
+		}
 	}
 }
 
-// A stream that carried nothing costs nothing, so a log line for one is not
-// reporting a duplication multiple of infinity.
-func TestWireIsZeroBeforeAnythingIsSent(t *testing.T) {
+// A stream that carried nothing costs nothing, in either direction, so a session
+// line for one is not reporting a multiple of infinity.
+func TestTrafficIsZeroBeforeAnythingIsSent(t *testing.T) {
 	entry, _ := chain(t, 2, 0, nil, nil)
 	s, err := entry.Open()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := s.Wire(); got != 0 {
-		t.Errorf("unused stream already cost %d bytes", got)
+	if got := s.Traffic(); got.Total() != 0 {
+		t.Errorf("unused stream already cost %+v", got)
 	}
 }

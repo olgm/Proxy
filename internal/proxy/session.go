@@ -34,10 +34,9 @@ type Session struct {
 	End  time.Time
 	Up   int64
 	Down int64
-	// Wire is what carrying the payload cost on the tunnel's legs, counting
-	// every duplicate and every re-send. Zero on a TCP route, which has no
-	// copies to count.
-	Wire uint64
+	// Chain is what the session cost the fleet in traffic a VPS bills for: every
+	// byte in or out of every node that carried it. See chainCost.
+	Chain uint64
 	// Online is this node's count of relayed logins at the moment of the event.
 	// A node knows its own and no others, which is why the fleet-wide roster is
 	// a separate feed that only the bot can build.
@@ -75,10 +74,13 @@ func (f *sessionFeed) logout(s Session) {
 		return
 	}
 	line := fmt.Sprintf("**%s** %s left · %s · up %s down %s", s.Node, code(s.Name), s.For(), size(s.Up), size(s.Down))
-	if s.Wire > 0 {
-		line += " wire " + size(int64(s.Wire))
+	if s.Chain > 0 {
+		line += " · chain " + size(int64(s.Chain))
+		// Against the payload, so the figure says what the chain cost to carry a
+		// session rather than only how big it was. A direct exit is ×2.0 — one
+		// node billed at each end — and every duplicated leg adds to that.
 		if p := s.Up + s.Down; p > 0 {
-			line += fmt.Sprintf(" ×%.2f", float64(s.Wire)/float64(p))
+			line += fmt.Sprintf(" ×%.1f", float64(s.Chain)/float64(p))
 		}
 	}
 	f.q.Send(line + fmt.Sprintf(" · online %d", s.Online))
@@ -116,12 +118,28 @@ func uuidPart(uuid string) string {
 	return " `" + uuid + "`"
 }
 
-// wireOf reports what the tunnel spent carrying a session. A TCP route has no
-// copies to count and reports nothing.
-func wireOf(u halfCloser) uint64 {
+// chainCost is what a session cost the fleet in traffic a VPS bills for: every
+// byte in or out of every node that carried it.
+//
+// Two nodes are billed for each byte that crosses a tunnel leg — it leaves one
+// and arrives at the other — and one node is billed at each end of the chain,
+// where the far side is a player or the backend. So the two ends come to
+// 2·(up+down) together, and each leg to twice what crossed it.
+//
+// This node measures its own leg exactly: duplicates, re-sends and the acks and
+// nacks that repair it. The legs past it are reckoned to cost the same, which
+// holds while every leg carries the same chunks the same number of times, as
+// they all do at duplicate 2, and is out by however much their loss rates
+// differ. legs is the one part of the shape a node cannot see for itself —
+// Hops names the node after this one, never how many come after that.
+func chainCost(u halfCloser, legs int, up, down int64) uint64 {
+	ends := uint64(2 * (up + down))
 	st, ok := u.(*tunnel.Stream)
 	if !ok {
-		return 0
+		return ends // a direct exit: the player's leg and the backend's, no more
 	}
-	return uint64(st.Wire())
+	if legs < 1 {
+		legs = 1 // there is a stream, so there is at least the leg just measured
+	}
+	return ends + 2*uint64(legs)*st.Traffic().Total()
 }

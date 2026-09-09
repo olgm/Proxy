@@ -101,6 +101,15 @@ type Listener struct {
 	Hops []Link `json:"hops,omitempty"`
 	// Peers are the previous nodes, over UDP. Required on a UDP listener.
 	Peers []Link `json:"peers,omitempty"`
+	// ChainLegs is how many tunnel legs lie between this listener and the exit,
+	// which a node cannot work out for itself: Hops names the node after this one
+	// and says nothing about how many come after that. proxyctl fills it from the
+	// route, and it is read only to price a session — see chainCost. Zero on a
+	// direct exit, and taken as one on a tunnel deployed before this existed.
+	//
+	// It is the longest path's length where an entry races several, which prices
+	// a raced session as if every leg carried what the busiest one did.
+	ChainLegs int `json:"chain_legs,omitempty"`
 	// AllowFrom is a list of source IPs or CIDRs. Empty means allow anyone, which
 	// is only correct for a public ingress: a relay left open is a free proxy to
 	// the backend, and the abuse lands on our egress IP. It applies to TCP only —
@@ -187,6 +196,11 @@ type server struct {
 	motd   *mc.Motd
 	// online is the count of logins currently being relayed, which is the number
 	// the MOTD reports and the only live state this node keeps about a session.
+	//
+	// It counts this listener's own logins, while live is the whole node's. Every
+	// node deployed today has exactly one Minecraft listener, so the two agree; a
+	// node given a second ingress would see the feed report one count and the
+	// roster another, both right about a different question. See README.
 	online atomic.Int64
 	// countMu orders online against the feed line that reports it.
 	countMu sync.Mutex
@@ -786,34 +800,19 @@ func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake) {
 
 	s.live.remove(id)
 
-	sess.End, sess.Up, sess.Down, sess.Wire = time.Now(), up, down, wireOf(u)
+	sess.End, sess.Up, sess.Down = time.Now(), up, down
+	sess.Chain = chainCost(u, s.ChainLegs, up, down)
 	s.live.record(sess)
 	// The count and the line that reports it, together. They are two steps, and
 	// two sessions ending at once would otherwise be able to print their counts
 	// in the opposite order to the counting.
 	s.countMu.Lock()
 	sess.Online = s.online.Add(-1)
-	log.Printf("%s: logout %s name=%q uuid=%q for %s up=%s down=%s%s online=%d",
+	log.Printf("%s: logout %s name=%q uuid=%q for %s up=%s down=%s chain=%s online=%d",
 		s.Bind, ip, name, uuid, sess.For(),
-		size(up), size(down), wireCost(u, up+down), sess.Online)
+		size(up), size(down), size(int64(sess.Chain)), sess.Online)
 	s.feed.logout(sess)
 	s.countMu.Unlock()
-}
-
-// wireCost reports what the tunnel actually spent carrying a session, and how much
-// more that was than the session itself. Duplication is set per leg, so the payload
-// figure alone never shows what a chain costs to run — this is the number that says
-// whether a duplicate count is worth what it is buying.
-func wireCost(u halfCloser, payload int64) string {
-	st, ok := u.(*tunnel.Stream)
-	if !ok {
-		return ""
-	}
-	wire := st.Wire()
-	if wire == 0 || payload <= 0 {
-		return fmt.Sprintf(" wire=%s", size(int64(wire)))
-	}
-	return fmt.Sprintf(" wire=%s(x%.2f)", size(int64(wire)), float64(wire)/float64(payload))
 }
 
 // size renders a byte count the way an operator reads one.

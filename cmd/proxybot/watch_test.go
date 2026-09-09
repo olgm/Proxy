@@ -21,7 +21,7 @@ func pastAt(node, name, uuid string, minsAgo int) control.Past {
 	return control.Past{
 		Node: node, Name: name, UUID: uuid, IP: "203.0.113.9",
 		Start: end.Add(-10 * time.Minute), End: end,
-		Up:    4200, Down: 51700, Wire: 111600,
+		Up: 4200, Down: 51700, Chain: 111600,
 	}
 }
 
@@ -66,7 +66,7 @@ func TestWatchShowsAccountsOnlineAndHistory(t *testing.T) {
 		"Watching <@" + watched + ">",
 		"**Accounts**", "`Notch`", "`Alex`", notchUUID,
 		"**Online now**", "on **hk**", "203.0.113.9", "12m",
-		"**Sessions**", "up 4.1KB", "wire 109.0KB",
+		"**Sessions**", "up 4.1KB", "chain 109.0KB",
 	} {
 		if !strings.Contains(r.text, want) {
 			t.Errorf("watch is missing %q:\n%s", want, r.text)
@@ -144,7 +144,7 @@ func TestWatchButtonIDRoundTrips(t *testing.T) {
 // reading a private reply is not the audience a channel feed is.
 func TestSessionLineCarriesWhatWasAskedFor(t *testing.T) {
 	got := sessionLine(pastAt("hk", "Notch", notchUUID, 0))
-	for _, want := range []string{"`Notch`", "**hk**", "`203.0.113.9`", "up 4.1KB", "down 50.5KB", "×2.00"} {
+	for _, want := range []string{"`Notch`", "**hk**", "`203.0.113.9`", "up 4.1KB", "down 50.5KB", "chain 109.0KB", "×2.0"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("session line is missing %q: %s", want, got)
 		}

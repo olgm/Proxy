@@ -163,10 +163,8 @@ func (d *dir) finish() error {
 // arrived twice from a lossy leg leaves once onto a clean one.
 func (d *dir) transmit(c *chunk, rtx bool) {
 	plain := encode(d.s.id, c, rtx)
-	sealed := NonceLen + len(plain) + GCMOverhead
 	for _, l := range d.send {
-		l.send(plain, l.dup, rtx)
-		d.s.wire.Add(uint64(l.dup * sealed))
+		d.s.sent.Add(uint64(l.send(plain, l.dup, rtx)))
 	}
 	d.mu.Lock()
 	d.lastSent = time.Now()
@@ -356,7 +354,7 @@ func (d *dir) onNack(l *Link, seqs []uint64) {
 	}
 	d.mu.Unlock()
 	for _, c := range resend {
-		l.send(encode(d.s.id, c, true), l.dup, true)
+		d.s.sent.Add(uint64(l.send(encode(d.s.id, c, true), l.dup, true)))
 	}
 }
 
@@ -439,19 +437,19 @@ func (d *dir) tick(now time.Time) {
 		slices.Sort(ask)
 		plain := appendNack(nil, d.s.id, ask)
 		for _, l := range d.back {
-			l.send(plain, 1, false)
+			d.s.sent.Add(uint64(l.send(plain, 1, false)))
 		}
 	}
 	if ack > 0 {
 		plain := appendAck(nil, d.s.id, ack)
 		for _, l := range d.back {
-			l.send(plain, 1, false)
+			d.s.sent.Add(uint64(l.send(plain, 1, false)))
 		}
 	}
 	if head > 0 {
 		plain := appendHead(nil, d.s.id, head)
 		for _, l := range d.send {
-			l.send(plain, 1, false)
+			d.s.sent.Add(uint64(l.send(plain, 1, false)))
 		}
 	}
 	if probe != nil {
@@ -512,20 +510,35 @@ type Stream struct {
 	// rx and tx are the terminal view of those two. Nil at a relay.
 	rx, tx *dir
 
-	// wire is every byte this node has put on a socket for this stream: each
-	// chunk once per copy the leg is set to send, plus each re-send. Payload says
-	// what the session carried; this says what carrying it cost, which is the only
-	// way to see what a duplicate count is actually buying.
-	wire atomic.Uint64
+	// sent and recv are every byte this node has put on a socket for this stream
+	// and taken off one: each chunk once per copy the leg is set to carry, plus
+	// every re-send, plus the acks and nacks that keep it repaired, all sealed.
+	// Payload says what the session carried; these say what carrying it cost,
+	// which is the only way to see what a duplicate count is actually buying —
+	// and, added up across the chain, what a session costs in billed traffic.
+	//
+	// Link keepalives are not here: a ping belongs to the leg, not to a session,
+	// and it is sent whether anyone is playing or not.
+	sent, recv atomic.Uint64
 
 	mu       sync.Mutex
 	lastSeen time.Time
 	expires  time.Time // once closed, state lingers to answer late NACKs
 }
 
-// Wire reports what this stream has cost on the tunnel's legs, duplicates and
-// re-sends included. The ingress logs it beside the payload at logout.
-func (s *Stream) Wire() uint64 { return s.wire.Load() }
+// Traffic is what one node spent on one stream: what it put on its legs and what
+// it took off them, as the legs carried it rather than as the session read it.
+type Traffic struct{ Sent, Recv uint64 }
+
+// Total is what both halves cost together.
+func (t Traffic) Total() uint64 { return t.Sent + t.Recv }
+
+// Traffic reports what this stream has cost this node on the tunnel's legs,
+// duplicates and re-sends included. The ingress logs it beside the payload at
+// logout, where it is the measured leg the rest of the chain is reckoned from.
+func (s *Stream) Traffic() Traffic {
+	return Traffic{Sent: s.sent.Load(), Recv: s.recv.Load()}
+}
 
 func (s *Stream) Read(p []byte) (int, error) {
 	if s.rx == nil {

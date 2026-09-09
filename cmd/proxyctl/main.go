@@ -836,6 +836,10 @@ func expandUDP(t *Topology, r Route, cfgs map[string]*proxy.Config, next int) (i
 		if name == r.Entry {
 			l.Bind = bindAddr(node.BindAddr, r.Port)
 			l.Minecraft = minecraft(r)
+			// Only the entry needs this: it is the only node that sees a login,
+			// and the only one that has to price the whole chain from the one leg
+			// it can measure.
+			l.ChainLegs = chainLegs(r)
 			checks = append(checks, entryCheck(node, name, r.Port))
 		} else {
 			l.Net = "udp"
@@ -866,6 +870,19 @@ func expandUDP(t *Topology, r Route, cfgs map[string]*proxy.Config, next int) (i
 		add(cfgs, name, l)
 	}
 	return next, checks, nil
+}
+
+// chainLegs is how many tunnel legs a session crosses between the entry and the
+// exit. Via lists what is in between, so a path of n intermediate nodes is n+1
+// legs. Where an entry races several paths this is the longest of them, which is
+// what a node is told so that it prices a raced session by its busiest leg
+// rather than its cheapest.
+func chainLegs(r Route) int {
+	n := 0
+	for _, p := range r.Paths {
+		n = max(n, len(p.Via)+1)
+	}
+	return n
 }
 
 // graph is one route's node-to-node edges, each with the number of copies it

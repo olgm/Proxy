@@ -315,7 +315,10 @@ func (n *Node) newStream(id uint64) *Stream {
 	return s
 }
 
-func (n *Node) handle(l *Link, p packet) {
+// handle dispatches one decoded datagram. size is what it weighed on the socket,
+// sealed, which is what the leg was billed for and what a session's share of the
+// bill is built from.
+func (n *Node) handle(l *Link, p packet, size int) {
 	switch p.typ {
 	case msgPing:
 		l.send(appendEcho(nil, msgPong, p.nonce), 1, false)
@@ -372,6 +375,9 @@ func (n *Node) handle(l *Link, p packet) {
 
 	now := time.Now()
 	s.touch(now)
+	// Attributable from here down: everything above either belongs to the link
+	// rather than to a session, or names a stream this node does not have.
+	s.recv.Add(uint64(size))
 
 	// A datagram arriving from the entry side carries data going down; anything
 	// else on that link is a report about what we last sent up, and vice versa.
@@ -398,13 +404,13 @@ func (n *Node) handle(l *Link, p packet) {
 			// Pass the watermark on so every hop behind us can free its buffer too.
 			plain := appendAck(nil, s.id, p.through)
 			for _, k := range ctrl.back {
-				k.send(plain, 1, false)
+				s.sent.Add(uint64(k.send(plain, 1, false)))
 			}
 		}
 	case msgReset:
 		plain := appendReset(nil, s.id)
 		for _, k := range data.send {
-			k.send(plain, 1, false)
+			s.sent.Add(uint64(k.send(plain, 1, false)))
 		}
 		s.abort(ErrReset)
 	}
@@ -426,7 +432,7 @@ func (n *Node) close(s *Stream, reset bool) {
 	if reset {
 		plain := appendReset(nil, s.id)
 		for _, l := range n.links() {
-			l.send(plain, 1, false)
+			s.sent.Add(uint64(l.send(plain, 1, false)))
 		}
 	}
 }

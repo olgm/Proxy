@@ -183,10 +183,10 @@ func sessionLine(p control.Past) string {
 		p.Start.UTC().Format("2 Jan 15:04"), p.End.UTC().Format("15:04"),
 		p.End.Sub(p.Start).Round(time.Second),
 		size(p.Up), size(p.Down))
-	if p.Wire > 0 {
-		fmt.Fprintf(&b, " wire %s", size(int64(p.Wire)))
+	if p.Chain > 0 {
+		fmt.Fprintf(&b, " · chain %s", size(int64(p.Chain)))
 		if payload := p.Up + p.Down; payload > 0 {
-			fmt.Fprintf(&b, " ×%.2f", float64(p.Wire)/float64(payload))
+			fmt.Fprintf(&b, " ×%.1f", float64(p.Chain)/float64(payload))
 		}
 	}
 	return b.String()

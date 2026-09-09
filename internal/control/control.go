@@ -83,8 +83,14 @@ type Past struct {
 	End   time.Time `json:"end"`
 	Up    int64     `json:"up"`
 	Down  int64     `json:"down"`
-	// Wire is what the tunnel spent carrying the payload, zero on a TCP route.
-	Wire uint64 `json:"wire,omitempty"`
+	// Chain is what the session cost the fleet in billed traffic: every byte in
+	// or out of every node that carried it, duplicates and repairs included.
+	//
+	// It is a new key rather than the old `wire`, which counted one direction of
+	// one leg and was divided by both directions of the payload wherever it was
+	// shown. A record written before v2.2.0 has no chain figure, which is the
+	// honest answer: what it holds is not this.
+	Chain uint64 `json:"chain,omitempty"`
 }
 
 // Live is one session in progress, as the node sees it. There are no byte counts

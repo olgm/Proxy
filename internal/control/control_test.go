@@ -74,7 +74,7 @@ func (s stubSessions) Live() []Live { return s }
 // testPast is what every served node in these tests has written down.
 var testPast = []Past{{Name: "Notch", UUID: notchUUID, IP: "203.0.113.9",
 	Start: time.Date(2026, 9, 5, 11, 0, 0, 0, time.UTC),
-	End:   time.Date(2026, 9, 5, 11, 42, 0, 0, time.UTC), Up: 4200, Down: 51700, Wire: 111600}}
+	End:   time.Date(2026, 9, 5, 11, 42, 0, 0, time.UTC), Up: 4200, Down: 51700, Chain: 111600}}
 
 func (s stubSessions) History(uuids []string, limit int) ([]Past, error) {
 	if len(uuids) == 0 {
@@ -438,7 +438,7 @@ func TestHistoryReturnsFinishedSessions(t *testing.T) {
 	if len(past) != 1 || past[0].Name != "Notch" {
 		t.Fatalf("history = %+v", past)
 	}
-	if past[0].Up != 4200 || past[0].Wire != 111600 {
+	if past[0].Up != 4200 || past[0].Chain != 111600 {
 		t.Errorf("a finished session should carry what it cost: %+v", past[0])
 	}
 

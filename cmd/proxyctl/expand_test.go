@@ -524,3 +524,23 @@ func TestBotInstallScriptTokenHandling(t *testing.T) {
 		}
 	}
 }
+
+// An entry has to be told how far it is from the exit. It can see the node it
+// hands a stream to and nothing past that, so it cannot price a session's whole
+// chain from its own leg without being told how many legs there are.
+func TestEntryIsToldHowManyLegsItIsFromTheExit(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		r    Route
+		want int
+	}{
+		{"one relay between", Route{Paths: []Path{{Via: []string{"ty"}}}}, 2},
+		{"straight to the exit", Route{Paths: []Path{{Via: nil}}}, 1},
+		{"two relays between", Route{Paths: []Path{{Via: []string{"ty", "sg"}}}}, 3},
+		{"raced paths take the longest", Route{Paths: []Path{{Via: []string{"ty"}}, {Via: nil}}}, 2},
+	} {
+		if got := chainLegs(tc.r); got != tc.want {
+			t.Errorf("%s: chainLegs = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
