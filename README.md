@@ -43,6 +43,14 @@ go run ./cmd/proxyctl whitelist list       # once deployed: manage the list from
 Commands: `config`, `deploy`, `status`, `uninstall`, `version`, `whitelist`. The Discord bot
 needs one more thing before `deploy`; see "Discord bot" below.
 
+A deploy restarts `proxyd` on every node, which disconnects everyone playing. It
+is no longer silent about it: a node asked to stop closes its listeners, ends
+each session, and waits up to five seconds for every one to be written down and
+reported before it goes. So a restart costs the players their game and costs the
+record nothing. Before v2.2.0 the process was killed on top of its relays, and
+every session open at the time vanished — no logout line, no record, nothing in
+the feed but a join that never left.
+
 ## topology.json
 
 | field | meaning |
@@ -466,7 +474,7 @@ the next:
 `Notch` on **hk** from `203.0.113.9` · 12m
 
 **Sessions** — page 1
-`Notch` **hk** `203.0.113.9` · 5 Sep 11:00 → 11:42 (42m) · up 4.1MB down 51.7MB wire 111.6MB ×2.00
+`Notch` **hk** `203.0.113.9` · 5 Sep 11:00 → 11:42 (42m) · up 4.1MB down 51.7MB · chain 111.6MB ×2.0
 ```
 
 **This is the one place the client IP is reported**, and why the command is
@@ -478,6 +486,12 @@ Which accounts belong to the member is decided by the tag on their whitelist
 lines, as everywhere else; the sessions are then found by uuid. So `/watch` shows
 the history of the accounts they own **now** — hand an account to somebody else
 and its past sessions follow the account, not the member who used to hold it.
+
+A client before 1.19 sends no uuid in Login Start, so the node takes the one the
+whitelist matched it to and records the session under that. Without it a 1.8
+player's sessions were stored under no identity at all and `/watch` found none of
+them, however many there were. Sessions recorded before v2.2.0 have no identity
+and stay unattributed; nothing can recover one that was never written down.
 
 Sessions come from `/var/lib/proxyd/sessions.jsonl`, which every ingress writes as
 a session ends. It holds what the node's journal line already holds. It is bounded
@@ -543,17 +557,40 @@ One line when a player logs in and one when they log out:
 
 ```
 **hk** `Notch` joined `069a79f4-44e9-4726-a5be-fca90e38aaf5` · online 2
-**hk** `Notch` left · 42m18s · up 4.1MB down 51.7MB wire 111.6MB ×2.00 · online 1
+**hk** `Notch` left · 42m18s · up 4.1MB down 51.7MB · chain 111.6MB ×2.0 · online 1
 ```
 
 `online` is that node's own count, not the fleet's. A node knows its own sessions
 and no others — nothing crosses between nodes but keyed links, and a login is not
 worth one.
 
-`up` and `down` are payload; `wire` is what carrying it cost on the tunnel's legs,
-counting every duplicate and re-send, with the multiple beside it. It is absent on
-a TCP route, which has no copies to count. `name` and `uuid` come from Login Start,
-so they are the client's own word — see "What it does not do".
+It is also that *listener's* count, while the roster `/watch` reads belongs to the
+node. Every node deployed today has exactly one Minecraft listener, so the two
+always agree; give a node a second ingress and the feed would report one number
+and the roster another, each right about a different question.
+
+`up` and `down` are payload: what the session carried, each way. `chain` is what
+carrying it cost the fleet in traffic a VPS bills for — every byte in or out of
+every node that touched it — with the multiple over payload beside it.
+
+A byte crossing a tunnel leg is billed twice, once leaving one node and once
+arriving at the next, and the two ends of the chain are billed once each, where
+the far side is a player or the backend. So a direct exit is exactly `×2.0`, which
+is the floor, and every duplicated leg adds to it. The figure is the only way to
+see what a `duplicate` setting is actually buying.
+
+Each node measures its own leg exactly — duplicates, re-sends, and the acks and
+nacks that repair them. The legs past it are reckoned to cost the same, which
+holds while every leg carries the same chunks the same number of times, and is
+out by however much their loss rates differ. Link keepalives are not counted: a
+ping belongs to the leg whether anyone is playing or not.
+
+An account holds one session. A client that reconnects while its last attempt is
+still open ends that one first, so a retry replaces a session rather than adding
+a second under the same name.
+
+`name` and `uuid` come from Login Start, so they are the client's own word — see
+"What it does not do".
 
 **The client IP is deliberately not here.**  It is in the node's journal, where an
 operator who has the node already has it. A channel is a wider audience than that,
@@ -561,9 +598,10 @@ and a login feed already tells its readers which entries are live, so point it a
 a channel you would not hand the entry addresses to.
 
 A burst of reconnects arrives as one message rather than fifty: lines are gathered
-for a couple of seconds and posted together. If more arrive than the queue holds,
-the feed says how many it dropped rather than blocking the login — a feed that
-stalls a session is worse than a feed with a hole in it.
+for a couple of seconds and posted together, and sooner than that if the queue is
+filling up. If more arrive than it holds, the feed says how many it dropped rather
+than blocking the login — a feed that stalls a session is worse than a feed with a
+hole in it, and one with a hole it does not mention is worse than either.
 
 ### probe
 
@@ -1041,14 +1079,12 @@ A node logs one line when a session opens and one when it closes:
 
 ```
 :25565: login 203.0.113.9 name="Notch" uuid="069a79f4-…" proto=47 online=3
-:25565: logout 203.0.113.9 name="Notch" uuid="069a79f4-…" for 42m18s up=4.1MB down=51.7MB wire=111.6MB(x2.00) online=2
+:25565: logout 203.0.113.9 name="Notch" uuid="069a79f4-…" for 42m18s up=4.1MB down=51.7MB chain=111.6MB online=2
 ```
 
-`up` and `down` are payload: what the session carried. `wire` is what carrying it
-cost on the tunnel's legs, counting every duplicate and every re-send, with the
-multiple over payload beside it. That figure is the only way to see what a
-`duplicate` setting is actually buying, and it is absent on a TCP route, which has
-no copies to count.
+`up` and `down` are payload: what the session carried. `chain` is what carrying it
+cost the fleet in billed traffic, across every node it crossed; see the `sessions`
+feed above for how it is arrived at.
 
 `name` and `uuid` come from Login Start, so they are the client's own word — see
 "What it does not do". A route with no whitelist does not read that packet at all
