@@ -123,8 +123,8 @@ func uuidPart(uuid string) string {
 // This node measures its own leg exactly: duplicates, re-sends and the acks and
 // nacks that repair it. The legs past it are reckoned to cost the same, which
 // holds while every leg carries the same chunks the same number of times, as
-// they all do at duplicate 2, and is out by however much their loss rates
-// differ. legs is the one part of the shape a node cannot see for itself —
+// they all do while one `duplicate` covers the route, and is out by however much
+// their loss rates differ. legs is the one part of the shape a node cannot see for itself —
 // Hops names the node after this one, never how many come after that.
 func chainCost(u halfCloser, legs int, up, down int64) uint64 {
 	ends := uint64(2 * (up + down))
