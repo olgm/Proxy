@@ -14,7 +14,7 @@
   "nodes": {
     "hk":        {"ssh": "root@198.51.100.110", "addr": "198.51.100.10",   "id": 1},
     "ty-a":     {"ssh": "root@198.51.100.121",    "addr": "198.51.100.21",   "id": 2},
-    "ty-b": {"ssh": "root@198.51.100.122",  "addr": "198.51.100.22", "id": 3},
+    "ty-b": {"ssh": "root@198.51.100.122",  "addr": "198.51.100.22",   "id": 3},
     "ty-c":    {"ssh": "root@198.51.100.123",  "addr": "198.51.100.23",  "id": 4},
     "ch":        {"ssh": "root@198.51.100.130",  "addr": "198.51.100.30", "id": 5},
     "ty-d":    {"ssh": "root@198.51.100.124", "addr": "198.51.100.24", "id": 6}
@@ -22,11 +22,11 @@
 
   "legs": [
     {"a": "hk",        "b": "ty-a",     "expect_ms": 45},
-    {"a": "hk",        "b": "ty-b", "expect_ms": 70},
+    {"a": "hk",        "b": "ty-b", "expect_ms": 44},
     {"a": "ty-a",     "b": "ty-b", "expect_ms": 1},
     {"a": "ty-a",     "b": "ty-c",    "expect_ms": 1},
     {"a": "ty-b", "b": "ty-c",    "expect_ms": 1},
-    {"a": "ty-b", "b": "ch",        "expect_ms": 128},
+    {"a": "ty-b", "b": "ch",        "expect_ms": 121},
     {"a": "ty-c",    "b": "ch",        "expect_ms": 130},
     {"a": "ty-a",     "b": "ty-d",    "expect_ms": 1},
     {"a": "ty-d",    "b": "ty-c",    "expect_ms": 1},

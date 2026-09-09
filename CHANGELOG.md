@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- `trial.example.json`: the ty-b node is `198.51.100.22`, and the two legs that
+  reach it now expect 44 ms and 121 ms rather than 70 and 128. ty-b replaced the
+  service's primary address on 2026-09-09. The old one sat in `198.51.100.0/22`, a
+  prefix AS932 egressed to Global Secure Layer at Singapore instead of the local
+  Hong Kong handoff, and that NTT rather than GSL carried westward out of Chicago —
+  70.33 ms from hk where ty1 in `198.51.100.0/24` measured 43.70, and 130.60 from ch
+  against ty1's 121.29. Re-measured on the new address the same way: **43.81** and
+  **121.27**, a chain of 165.08 ms against ty1's 164.99. The node was never slow; its
+  prefix was, on both legs, for 35.9 ms in total.
+
+  The `expect_ms` values matter beyond bookkeeping. `trace.over_ms` is 5, so a leg
+  more than 5 ms over its expectation traces itself; left at 70 the hk leg would have
+  gone quiet about a 26 ms regression, and left at 128 the ch leg would have tolerated
+  a 7 ms one. An expectation set from a broken measurement hides the repair as
+  surely as it hides the fault.
+
 ## v2.2.2 — 2026-09-09
 
 - **Every internal leg carries one copy.** The three tunnelled routes were at
