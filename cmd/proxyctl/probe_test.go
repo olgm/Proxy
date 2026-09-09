@@ -137,6 +137,21 @@ func TestProbeChainsOnlyMultiLegRoutes(t *testing.T) {
 		"ty>chi/leg x1 answer", "ty>chi/leg x2 answer"}, "chi")
 }
 
+// A chain whose legs all carry one copy is measured once, for the same reason a
+// leg at one copy is: the baseline and the production class would be the same
+// measurement, written to the dataset under the same name and the same number.
+func TestProbeDoesNotMeasureAnUnduplicatedChainTwice(t *testing.T) {
+	top := topo(Route{Name: "r", Entry: "hk", Port: 25565, Transport: "udp",
+		Duplicate: 1, Via: []string{"ty", "chi"}, Target: hypixel()})
+	cfgs := probeOK(t, top)
+
+	eq(t, classes(t, cfgs, "hk"), []string{"hk>chi/chain x1 origin", "hk>ty/leg x1 origin"}, "hk")
+	eq(t, classes(t, cfgs, "ty"), []string{
+		"hk>chi/chain x1 relay", "hk>ty/leg x1 answer", "ty>chi/leg x1 origin"}, "ty")
+	eq(t, classes(t, cfgs, "chi"), []string{
+		"hk>chi/chain x1 answer", "ty>chi/leg x1 answer"}, "chi")
+}
+
 // A chain carries each leg's own count, not one number for the whole path, so a
 // route with a quieter leg is probed the way it really runs.
 func TestProbeChainCarriesPerLegCounts(t *testing.T) {

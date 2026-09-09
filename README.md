@@ -859,8 +859,9 @@ not become one.
 
 Two things fall out of that and are not oversights:
 
-- **A leg already carrying one copy is measured once.** The baseline and the
-  production class would be the same measurement under two names.
+- **A leg or a chain already carrying one copy is measured once.** The baseline and
+  the production class would be the same measurement under two names. Since the
+  fleet went to `duplicate: 1` that is every class it has.
 - **A route of exactly one leg gets no end-to-end class.** It would be its leg
   class again. Today only Hong Kong has a chain; Tokyo and Sydney are one leg each.
 

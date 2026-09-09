@@ -211,7 +211,7 @@ func expandProbe(t *Topology, next int) (map[string]*probe.Config, []check, int,
 	// player's packet sees: every leg's copies, and every path raced into the exit.
 	for _, ch := range pt.chains {
 		name := ch.entry + ">" + ch.exit
-		for _, baseline := range []bool{false, true} {
+		for _, baseline := range baselines(ch) {
 			cid, err := nextID()
 			if err != nil {
 				return nil, nil, next, err
@@ -299,6 +299,24 @@ func counts(dup int) []int {
 		return []int{1}
 	}
 	return []int{1, dup}
+}
+
+// baselines says whether a chain needs its one-copy twin, the same way counts does
+// for a leg. A chain whose legs all carry one copy already is that baseline, and
+// measuring it twice would put two identical rows in the dataset under the same
+// name and the same number — exactly what the label in expandProbe exists to
+// prevent. The route's own count has to be one too, or the two would still differ
+// by the label they are written under.
+func baselines(ch probeChain) []bool {
+	if ch.dup > 1 {
+		return []bool{false, true}
+	}
+	for _, d := range ch.g.dup {
+		if d > 1 {
+			return []bool{false, true}
+		}
+	}
+	return []bool{false}
 }
 
 // isDown reports whether node dials peer, which is what decides whether the link
