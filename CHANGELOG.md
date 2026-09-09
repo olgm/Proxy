@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.2.2 — 2026-09-09
+
+- **Every internal leg carries one copy.** The three tunnelled routes were at
+  `duplicate: 2` and are now at 1. Nothing in the probe dataset argues for the
+  second copy: median 10m loss is 0.000% on every leg and every chain, and p99 is
+  the same to two decimals whether a class sends one copy or two. What it was
+  costing is not in doubt — the tunnel half of a session's `chain` figure is
+  literally twice what it needs to be at 2. The default in code is unchanged, so a
+  route that names no `duplicate` still gets 2, and putting it back is one number
+  per route.
+- **A chain whose legs all carry one copy is measured once.** The rule already held
+  for a leg — the baseline class and the production class are the same measurement
+  under two names — and going to `duplicate: 1` showed that a chain had never been
+  held to it. hk, ty and ch were each running two identical `hk>ch` classes, which
+  is two identical rows of the dataset under the same name and the same number, and
+  twice the probe traffic along the chain.
+
 ## v2.2.1 — 2026-09-09
 
 - A session line reports `chain` as bytes and nothing else. v2.2.0 put the
