@@ -4,6 +4,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/olgm/proxy/internal/control"
 	"github.com/olgm/proxy/internal/jsonl"
@@ -16,10 +18,22 @@ import (
 // It is the only state about a session that outlives the goroutine relaying it,
 // and it lasts exactly as long as that goroutine does. Nothing is remembered
 // after a logout — the session log is what remembers.
+//
+// It is also how a shutdown reaches a session. The goroutine relaying one holds
+// the only copy of what it cost until it returns, so a proxyd that exits with
+// relays running loses every session it was carrying — which is what the feed
+// had been showing as players who joined and never left.
 type live struct {
-	mu   sync.Mutex
-	next int64
-	m    map[int64]control.Live
+	mu      sync.Mutex
+	next    int64
+	m       map[int64]open
+	closing bool
+
+	// pending counts sessions that have not finished being written down. It
+	// outlives the register above by a hair: a session leaves m when its relay
+	// ends, and leaves this count only once its record and its feed line are
+	// out, which is the moment a shutdown may stop waiting for it.
+	pending atomic.Int64
 
 	// log is where a session goes when it ends, and history reads it back. Nil
 	// on a node with no state directory, where history simply reports nothing.
@@ -27,21 +41,76 @@ type live struct {
 	path string
 }
 
-func newLive() *live { return &live{m: map[int64]control.Live{}} }
+// open is one session in progress: what the control link reports about it, and
+// how to end it. end closes both sides of the relay, not just the client —
+// closing the client alone leaves the download direction blocked on a backend
+// that has no reason to hang up.
+type open struct {
+	control.Live
+	end func()
+}
 
-// add records a session and returns the handle that removes it again.
-func (l *live) add(s Session) int64 {
+func newLive() *live { return &live{m: map[int64]open{}} }
+
+// add records a session and returns the handle that removes it again. The caller
+// must pair it with done, which is what says the session has been written down.
+func (l *live) add(s Session, end func()) int64 {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	l.next++
-	l.m[l.next] = control.Live{Name: s.Name, UUID: s.UUID, IP: s.IP, Since: s.Start}
-	return l.next
+	id := l.next
+	l.m[id] = open{Live: control.Live{Name: s.Name, UUID: s.UUID, IP: s.IP, Since: s.Start}, end: end}
+	l.pending.Add(1)
+	closing := l.closing
+	l.mu.Unlock()
+	// A login that got in behind the listener closing. Nothing is coming along
+	// to end this one, so end it here: the relay returns at once and it is
+	// written down like any other.
+	if closing {
+		end()
+	}
+	return id
 }
 
 func (l *live) remove(id int64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.m, id)
+}
+
+// done reports that a session has been written down. Deferred by the relay, so
+// it happens whatever the relay does.
+func (l *live) done() { l.pending.Add(-1) }
+
+// endAll ends every session in progress, which is what makes each relay return
+// and run its own logout: record, journal line, feed line. It does not wait —
+// wait does that, and they are separate because those goroutines cannot finish
+// while this one holds the lock.
+func (l *live) endAll() {
+	l.mu.Lock()
+	l.closing = true
+	ends := make([]func(), 0, len(l.m))
+	for _, o := range l.m {
+		ends = append(ends, o.end)
+	}
+	l.mu.Unlock()
+	for _, end := range ends {
+		end()
+	}
+}
+
+// wait blocks until every session has been written down or d passes, and reports
+// how many were still going when it gave up. Bounded on purpose: a session whose
+// backend has stopped answering must not hold a restart open, because a restart
+// that will not finish is killed, and being killed is the thing this avoids.
+func (l *live) wait(d time.Duration) int64 {
+	deadline := time.Now().Add(d)
+	for {
+		n := l.pending.Load()
+		if n == 0 || time.Now().After(deadline) {
+			return n
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // record writes a finished session down. It is the only thing that remembers one:
@@ -94,8 +163,8 @@ func (l *live) Live() []control.Live {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	out := make([]control.Live, 0, len(l.m))
-	for _, s := range l.m {
-		out = append(out, s)
+	for _, o := range l.m {
+		out = append(out, o.Live)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Since.Equal(out[j].Since) {

@@ -45,6 +45,12 @@ const (
 
 	// defaultSessionLogMB bounds the session record, keeping one previous file.
 	defaultSessionLogMB = 64
+
+	// shutdownGrace is how long a stopping node waits for the sessions it just
+	// ended to be written down. Both sides of a relay are closed first, so this
+	// is only ever spent on a copy that will not unblock; systemd allows far
+	// longer, and going early would lose exactly the session this exists to keep.
+	shutdownGrace = 5 * time.Second
 )
 
 type Config struct {
@@ -212,13 +218,27 @@ type mojangAPI interface {
 // replace it so they neither reach the network nor depend on Mojang being up.
 var newMojang = func() mojangAPI { return mojang.New() }
 
-// Run starts every listener and blocks.
-func Run(cfg *Config) error {
+// Run starts every listener and blocks until stop is closed, then shuts the node
+// down without losing the sessions it is carrying. It also returns on its own if
+// the node stops serving: a listener that dies takes the process with it, as it
+// always has, because systemd brings it back and a node relaying on half its
+// listeners is worse than one that is plainly down.
+func Run(cfg *Config, stop <-chan struct{}) error {
 	n, err := start(cfg)
 	if err != nil {
 		return err
 	}
-	n.wg.Wait()
+	served := make(chan struct{})
+	go func() {
+		n.wg.Wait()
+		close(served)
+	}()
+	select {
+	case <-stop:
+	case <-served:
+	}
+	n.close()
+	<-served
 	return nil
 }
 
@@ -232,17 +252,32 @@ type node struct {
 	live    *live
 }
 
+// close shuts the node down in the order a session needs to survive it: stop
+// taking new ones, end the ones in progress, wait for each to be written down,
+// and only then take away the things they are written to.
 func (n *node) close() {
+	// New work first. What is relaying now is then all there will be.
 	for _, ln := range n.lns {
 		ln.Close()
 	}
+	if n.ctl != nil {
+		n.ctl.Close()
+	}
+	// Then the sessions themselves. Each relay returns and runs its own logout,
+	// so a stop produces the same record and the same feed line as a player
+	// closing their client would.
+	if n.live != nil {
+		n.live.endAll()
+		if left := n.live.wait(shutdownGrace); left > 0 {
+			log.Printf("shutdown: %d session(s) unfinished after %s; going anyway", left, shutdownGrace)
+		}
+	}
+	// The tunnel comes down after them, not before: a stream is the upstream of
+	// a session that is still writing its last bytes.
 	for _, s := range n.servers {
 		if s.tun != nil {
 			s.tun.Close()
 		}
-	}
-	if n.ctl != nil {
-		n.ctl.Close()
 	}
 	if n.live != nil && n.live.log != nil {
 		n.live.log.Close()
@@ -727,7 +762,13 @@ func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake) {
 		Proto: int(h.ProtocolVersion), Start: time.Now(),
 	}
 	sess.Online = s.online.Add(1)
-	id := s.live.add(sess)
+	// Both sides, so a shutdown unblocks the download direction too. The client
+	// going quiet is not enough to end a relay Hypixel is still writing to.
+	id := s.live.add(sess, func() { c.Close(); u.Close() })
+	// Deferred, so it runs after the logout below however this returns: a
+	// stopping node waits on this count, and it may only stop waiting once the
+	// session is in the log and in the feed.
+	defer s.live.done()
 	log.Printf("%s: login %s name=%q uuid=%q proto=%d online=%d", s.Bind, ip, name, uuid, h.ProtocolVersion, sess.Online)
 	s.feed.login(sess)
 

@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/olgm/proxy/internal/proxy"
 	"github.com/olgm/proxy/internal/version"
@@ -37,7 +39,18 @@ func main() {
 	if err != nil {
 		log.Fatalf("%v", err)
 	}
-	if err := proxy.Run(cfg); err != nil {
+	// A deploy is a systemctl restart, so SIGTERM is the ordinary way this
+	// process ends and the sessions it is carrying have to survive it being
+	// asked. Without this they were killed mid-relay: no logout line, no record,
+	// nothing in the feed but a join that never leaves.
+	stop := make(chan struct{})
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		log.Printf("%v: ending sessions", <-sig)
+		close(stop)
+	}()
+	if err := proxy.Run(cfg, stop); err != nil {
 		log.Fatalf("%v", err)
 	}
 }

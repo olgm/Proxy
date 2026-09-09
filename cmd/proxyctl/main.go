@@ -1388,6 +1388,7 @@ EnvironmentFile=-/etc/proxyd/feeds.env
 ExecStart=/usr/local/bin/proxyd -c /etc/proxyd/config.json
 Restart=always
 RestartSec=2
+TimeoutStopSec=15
 StateDirectory=proxyd
 NoNewPrivileges=true
 ProtectSystem=strict
