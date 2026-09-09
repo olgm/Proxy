@@ -1,5 +1,84 @@
 # Changelog
 
+## v2.2.0 — 2026-09-09
+
+The sessions feed reported six things wrongly and lost a seventh outright. All of
+it came out of one afternoon's reading of the feed against the nodes' own logs.
+
+- **A session open when proxyd stops is no longer lost.** proxyd handled no
+  signals at all, and every deploy is a `systemctl restart`, so the ordinary end
+  of this process was SIGTERM killing it mid-relay. A session's whole account of
+  itself — the record, the journal line, the feed line — is written by the
+  goroutine relaying it, in its tail, and none of that ran. The channel filled
+  with players who joined and never left, the online count restarted from zero
+  while they were still connected, and `/watch` had no history for a session that
+  plainly happened: `turnthetideg` logged into au at 09:08 on 2026-09-08 and the
+  10:34 restart took the session with it.
+
+  Stopping now runs in the order a session needs to survive it: close the
+  listeners, end each session, wait up to five seconds for each to be written
+  down, then close the tunnel, the log and the feed. Both sides of a relay are
+  closed to end one — closing the client alone leaves the download direction
+  blocked on a backend with no reason to hang up. A deploy takes up to five
+  seconds longer per node with players on it, and produces a real logout for each.
+
+- **A session records the identity the whitelist let it in under.** Login Start
+  carries a uuid only from 1.19. A 1.8 client sends its name and nothing else, so
+  the whitelist matched it on the name column and the login went on with no
+  identity attached — and everything that reads a session back is keyed by uuid.
+  Every session by a 1.8 player was written down under `""` and came back to
+  `/watch` as no sessions at all. The gate had already found the entry the name
+  belongs to; the login now takes that uuid with it. Records written before this
+  stay unattributed.
+
+- **`wire` becomes `chain`, and means the bill.** The old figure counted the bytes
+  one node put on a socket — at an ingress, the upload direction only, since the
+  download was duplicated by the hop above and never touched this node's send
+  path — and every place that rendered it divided by up plus down. Downloads run
+  some twenty-five times uploads here, so the multiple came out below one on every
+  duplicated route: ty reported x0.10 through x0.33 all week. The README's x2.00
+  was unreachable by construction, and ch, which is its own exit, showed no figure
+  at all.
+
+  What it reports now is what a session cost the fleet in traffic a VPS bills for.
+  A byte crossing a tunnel leg is billed twice, once leaving and once arriving,
+  and the chain's two ends are billed once each. So a direct exit is exactly
+  `×2.0` — the floor for every shape, and a figure ch can report like everyone
+  else — and each duplicated leg adds to it. A stream counts what it takes off the
+  socket as well as what it puts on, and the sending side counts the acks and
+  nacks that repair it as well as data: over a three-hour session those are
+  megabytes. Link keepalives stay out. `proxyctl` writes the leg count into the
+  entry's config, since `hops` names the next node and nothing past it; the legs
+  beyond the first are reckoned to cost what the measured one does.
+
+- **An account holds one session.** Nothing stopped a player holding two, so a
+  client whose first attempt got no answer and was retried held both: two joins,
+  two leaves, and one player counted as two online. That is what the channel had
+  been showing as a duplicated message — two connections that really existed,
+  reported accurately. A login now ends whatever that identity already has open,
+  and the new connection wins.
+
+- **The online count is rendered in the order it was counted.** Subtracting from
+  it and printing the line that reports it were two steps, so two sessions ending
+  at once could print their counts in the other order. A hazard rather than an
+  observed fault, and one mutex to remove.
+
+- **A drop is reported even when nothing else is queued.** The "…and N more that
+  did not fit" note was attached only to a message already going out, which threw
+  the count away in the case that most often causes drops — the sender stuck
+  inside one slow post. A filling queue also posts early now instead of sitting on
+  its timer until it overflows.
+
+Known and unfixed: `online` counts a listener's sessions while the roster counts
+the node's. Every node has exactly one Minecraft listener, so they agree; a second
+ingress on one node would make them disagree, each right about a different
+question. Documented in the README rather than changed.
+
+Not a bug in any of this, but visible through it: four sessions on 2026-09-08
+carried zero bytes in either direction for about twenty seconds before the player
+gave up, all within a couple of minutes of that player being added to the
+whitelist. The chain accepted the login and the backend never answered.
+
 ## v2.1.1 — 2026-09-08
 
 - `proxyctl`: a feed's env file is removed before it is written. `install(1)` is not
