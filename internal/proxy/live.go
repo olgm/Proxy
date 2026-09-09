@@ -77,6 +77,46 @@ func (l *live) remove(id int64) {
 	delete(l.m, id)
 }
 
+// replace ends any session already open under the same identity, so an account
+// holds one at a time, and reports how many it ended.
+//
+// A client that reconnects while its last attempt is still hanging open would
+// otherwise hold two at once: the feed announced the join twice and reported the
+// player as two online, and both were true of connections that really existed.
+// Observed on ch on 2026-09-08, where one player's dead first attempt and their
+// retry overlapped for eight seconds.
+//
+// The new connection wins. The old one is the one that stopped working — that is
+// why there is a new one — and a player watching their client reconnect wants
+// the reconnect to be the session that lives. It ends the ordinary way, so it is
+// recorded and reported like any other.
+//
+// Identity is the uuid wherever there is one, and the name only where there is
+// not. A route with no whitelist reads no Login Start and has neither; nothing
+// there is claiming to be anybody, so nothing is replaced.
+func (l *live) replace(uuid, name string) int {
+	if uuid == "" && name == "" {
+		return 0
+	}
+	l.mu.Lock()
+	var ends []func()
+	for _, o := range l.m {
+		if uuid != "" && o.UUID != "" {
+			if bare(o.UUID) != bare(uuid) {
+				continue
+			}
+		} else if name == "" || !strings.EqualFold(o.Name, name) {
+			continue
+		}
+		ends = append(ends, o.end)
+	}
+	l.mu.Unlock()
+	for _, end := range ends {
+		end()
+	}
+	return len(ends)
+}
+
 // done reports that a session has been written down. Deferred by the relay, so
 // it happens whatever the relay does.
 func (l *live) done() { l.pending.Add(-1) }

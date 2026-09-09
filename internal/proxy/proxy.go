@@ -759,6 +759,12 @@ func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake) {
 		}
 	}
 
+	// One account, one session: end whatever this player already has open before
+	// opening another. Their client reconnecting is the usual reason there is one.
+	if n := s.live.replace(uuid, name); n > 0 {
+		log.Printf("%s: %s reconnected; ending %d session(s) already open", s.Bind, ip, n)
+	}
+
 	sess := Session{
 		Node: s.node, IP: ip, Name: name, UUID: uuid,
 		Proto: int(h.ProtocolVersion), Start: time.Now(),
