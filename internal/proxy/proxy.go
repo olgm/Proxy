@@ -679,6 +679,13 @@ func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake) {
 			c.Write(mc.EncodeLoginDisconnect(denyMessage))
 			return
 		}
+		// A client before 1.19 sends no UUID and was let in on its name, so the
+		// only identity this session has is the one the whitelist matched it to.
+		// Take it: the session record and `/watch` are keyed by UUID, and a
+		// record without one is a session nobody can be shown.
+		if uuid == "" {
+			uuid = s.wl.UUIDOf(name)
+		}
 		login = raw
 	}
 	c.SetReadDeadline(time.Time{})

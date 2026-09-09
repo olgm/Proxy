@@ -256,3 +256,41 @@ func TestFinishedSessionIsWrittenDown(t *testing.T) {
 		t.Errorf("a bare uuid did not match the dashed one it was written as")
 	}
 }
+
+// A client before 1.19 sends no UUID, so the session it opens would be written
+// down under nobody — and `/watch` looks a session up by UUID, so nobody is who
+// it would come back to. The whitelist matched the login to an identity in order
+// to allow it at all; that identity is what the record carries.
+func TestOldClientSessionIsRecordedUnderItsIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.jsonl")
+	w, err := jsonl.NewWriter(path, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend, got := fakeLoginBackend(t)
+	ingress, s := feedIngress(t, backend, whitelistFile(t, "Notch:"+notchUUID+"\n"), "")
+	s.live.log, s.live.path = w, path
+
+	// 47 is 1.8.9: Login Start is the name and nothing else.
+	c := dialIngress(t, ingress, 47, mc.IntentLogin, loginStart("Notch", nil))
+	select {
+	case <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("login never reached the backend")
+	}
+	c.Close()
+	for s.online.Load() != 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	past, err := s.live.History([]string{notchUUID}, 10)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	if len(past) != 1 {
+		t.Fatalf("%d sessions found by uuid, want 1: a 1.8 session is invisible to /watch", len(past))
+	}
+	if past[0].Proto != 47 || past[0].UUID != notchUUID {
+		t.Errorf("session written down wrong: %+v", past[0])
+	}
+}

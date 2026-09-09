@@ -189,3 +189,36 @@ func TestOpenMissingFileFails(t *testing.T) {
 		t.Fatal("missing whitelist accepted")
 	}
 }
+
+// The identity behind an IGN is what a client too old to send a UUID leaves the
+// gate without. A name nobody listed has none, and a name that moved to another
+// entry answers with that entry's.
+func TestUUIDOfNamesTheIdentityBehindAnIGN(t *testing.T) {
+	l, _ := open(t, "Notch:"+notchUUID+"\nAlex:"+alexUUID+"\n")
+
+	if got := l.UUIDOf("Notch"); got != notchUUID {
+		t.Errorf("UUIDOf(Notch) = %q, want %q", got, notchUUID)
+	}
+	// The file is indexed by lowercased name, as Check matches it.
+	if got := l.UUIDOf("nOtCh"); got != notchUUID {
+		t.Errorf("UUIDOf is case sensitive: %q", got)
+	}
+	if got := l.UUIDOf("Herobrine"); got != "" {
+		t.Errorf("UUIDOf named an unlisted player %q", got)
+	}
+}
+
+// Check moves a renamed player to their new name before it answers, so the
+// lookup after it finds them there and the session is recorded under the
+// identity, not the name that has just stopped being theirs.
+func TestUUIDOfFollowsARename(t *testing.T) {
+	mj := &fakeMojang{owners: map[string]string{"notchnew": notchUUID}}
+	l, _ := openWith(t, "Notch:"+notchUUID+"\n", mj)
+
+	if !l.Check("NotchNew", "", testIP) {
+		t.Fatal("a renamed listed player was refused")
+	}
+	if got := l.UUIDOf("NotchNew"); got != notchUUID {
+		t.Errorf("UUIDOf(NotchNew) = %q, want %q", got, notchUUID)
+	}
+}

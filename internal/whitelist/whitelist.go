@@ -227,6 +227,27 @@ func (l *List) checkLocal(name, uuid string) (matched, listed bool) {
 	return false, false
 }
 
+// UUIDOf is the identity the list holds for an IGN, or "" if it holds none.
+//
+// It answers what Check leaves open. A client before 1.19 sends no UUID, so the
+// list matches it on its name alone and the login carries no identity onward —
+// and a session record without one belongs to nobody, because everything that
+// reads a session back is keyed by UUID. The name is the lookup and the file is
+// the answer.
+//
+// Call it after Check, which is what makes the name current: a player who
+// renamed and logged straight back in is moved to their new name there, so by
+// the time this is asked the name being asked about is the one on the entry.
+func (l *List) UUIDOf(name string) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.byName[strings.ToLower(name)]
+	if !ok {
+		return ""
+	}
+	return e.uuid
+}
+
 // claimedBy handles a name that is not in the file at all. Usually a stranger, but
 // also the shape of a listed player who renamed and logged straight back in on a
 // client too old to send a UUID. Ask Mojang who owns the name, and let them in only
