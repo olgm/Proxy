@@ -185,9 +185,6 @@ func sessionLine(p control.Past) string {
 		size(p.Up), size(p.Down))
 	if p.Chain > 0 {
 		fmt.Fprintf(&b, " · chain %s", size(int64(p.Chain)))
-		if payload := p.Up + p.Down; payload > 0 {
-			fmt.Fprintf(&b, " ×%.1f", float64(p.Chain)/float64(payload))
-		}
 	}
 	return b.String()
 }

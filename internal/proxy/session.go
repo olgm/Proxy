@@ -76,12 +76,6 @@ func (f *sessionFeed) logout(s Session) {
 	line := fmt.Sprintf("**%s** %s left · %s · up %s down %s", s.Node, code(s.Name), s.For(), size(s.Up), size(s.Down))
 	if s.Chain > 0 {
 		line += " · chain " + size(int64(s.Chain))
-		// Against the payload, so the figure says what the chain cost to carry a
-		// session rather than only how big it was. A direct exit is ×2.0 — one
-		// node billed at each end — and every duplicated leg adds to that.
-		if p := s.Up + s.Down; p > 0 {
-			line += fmt.Sprintf(" ×%.1f", float64(s.Chain)/float64(p))
-		}
 	}
 	f.q.Send(line + fmt.Sprintf(" · online %d", s.Online))
 }

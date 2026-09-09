@@ -144,7 +144,13 @@ func TestWatchButtonIDRoundTrips(t *testing.T) {
 // reading a private reply is not the audience a channel feed is.
 func TestSessionLineCarriesWhatWasAskedFor(t *testing.T) {
 	got := sessionLine(pastAt("hk", "Notch", notchUUID, 0))
-	for _, want := range []string{"`Notch`", "**hk**", "`203.0.113.9`", "up 4.1KB", "down 50.5KB", "chain 109.0KB", "×2.0"} {
+	// Bytes, not a ratio. What a session cost is a figure to add up across a
+	// month; how many times its own size that was is arithmetic the reader can
+	// do and mostly does not want.
+	if strings.Contains(got, "×") {
+		t.Errorf("session line still carries a multiple: %s", got)
+	}
+	for _, want := range []string{"`Notch`", "**hk**", "`203.0.113.9`", "up 4.1KB", "down 50.5KB", "chain 109.0KB"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("session line is missing %q: %s", want, got)
 		}
