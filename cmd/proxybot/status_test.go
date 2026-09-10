@@ -120,7 +120,7 @@ func up(node string, players int) snap {
 		node: node, live: live, hasProbe: true,
 		health: probe.Health{
 			Node: node, Classes: 2,
-			Legs: []probe.Leg{{Class: node + ">ch", Kind: probe.KindLeg, Window: "1m", P50: 42.5, N: 60}},
+			Legs: []probe.Leg{{Class: node + ">ch", Kind: probe.KindLeg, Window: "10m", P50: 42.5, N: 600}},
 		},
 	}
 }
@@ -332,8 +332,8 @@ func lastLine(f *fakeFeed) string {
 // leg at all.
 func TestPickLegTakesTheWholeRoute(t *testing.T) {
 	legs := []probe.Leg{
-		{Class: "hk>ty", Kind: probe.KindLeg, Window: "1m", P50: 44},
-		{Class: "hk>ch", Kind: probe.KindChain, Window: "1m", P50: 220.4},
+		{Class: "hk>ty", Kind: probe.KindLeg, Window: "10m", P50: 44, N: 600},
+		{Class: "hk>ch", Kind: probe.KindChain, Window: "10m", P50: 220.4, N: 600},
 	}
 	name, ms := pickLeg(legs)
 	if name != "hk→ch" || ms != 220.4 {
@@ -347,17 +347,27 @@ func TestPickLegTakesTheWholeRoute(t *testing.T) {
 // A probed that stopped measuring keeps reporting its last window forever. The
 // card would rather say nothing than say something that stopped being true.
 func TestStaleLatencyIsDropped(t *testing.T) {
-	fresh := probe.Leg{Class: "au>ch", Window: "1m", P50: 176.5, AgeSecs: 30}
-	old := probe.Leg{Class: "au>ch", Window: "1m", P50: 176.5, AgeSecs: 600}
+	fresh := probe.Leg{Class: "au>ch", Window: "10m", P50: 176.5, N: 600, AgeSecs: 120}
+	old := probe.Leg{Class: "au>ch", Window: "10m", P50: 176.5, N: 600, AgeSecs: 3600}
 	if _, ms := pickLeg([]probe.Leg{fresh}); ms != 176.5 {
 		t.Errorf("a fresh window was dropped: %v", ms)
 	}
 	if _, ms := pickLeg([]probe.Leg{old}); ms != -1 {
-		t.Errorf("a ten-minute-old window was still shown: %v", ms)
+		t.Errorf("an hour-old ten-minute window was still shown: %v", ms)
 	}
 	// A class that has measured nothing yet is listed with no figure, not a zero.
 	if _, ms := pickLeg([]probe.Leg{{Class: "au>ch", P50: -1, N: -1, AgeSecs: -1}}); ms != -1 {
 		t.Errorf("a class with nothing measured reported %v", ms)
+	}
+}
+
+// A window in which every probe was lost still closes: it has sends behind it and
+// no round trips, so its percentile is zero. A leg that carried nothing must not
+// read as the fastest one on the card.
+func TestATotallyLostWindowIsNotZeroMilliseconds(t *testing.T) {
+	lost := probe.Leg{Class: "au>ch", Window: "10m", P50: 0, N: 0, Loss: 100, AgeSecs: 60}
+	if _, ms := pickLeg([]probe.Leg{lost}); ms != -1 {
+		t.Errorf("a leg at 100%% loss reported %v ms", ms)
 	}
 }
 

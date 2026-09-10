@@ -482,7 +482,11 @@ func pickLeg(legs []probe.Leg) (string, float64) {
 		return "", -1
 	}
 	name := strings.ReplaceAll(best.Class, ">", "→")
-	if best.P50 < 0 || stale(best) {
+	// N and not P50: a window in which every probe was lost still closes, with no
+	// round trips behind it and a percentile of zero. Drawing that would put
+	// "0.0 ms" against a leg that carried nothing, which is the most wrong a
+	// latency can be.
+	if best.N <= 0 || stale(best) {
 		return name, -1
 	}
 	return name, best.P50
