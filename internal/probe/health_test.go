@@ -115,26 +115,38 @@ func TestHealthListsAClassBeforeItHasMeasuredAnything(t *testing.T) {
 // its age, which is the whole reason the link carries it.
 func TestHealthReportsTheNewestWindow(t *testing.T) {
 	n := &Node{
-		short:   time.Minute,
-		recent:  map[string]*Report{},
-		classes: map[uint8]*class{1: {Class: Class{Name: "a>b", Kind: KindLeg}, down: []hop{{}}}},
+		healthWindow: 10 * time.Minute,
+		recent:       map[string]*Report{},
+		classes:      map[uint8]*class{1: {Class: Class{Name: "a>b", Kind: KindLeg}, down: []hop{{}}}},
 	}
 	n.keep(&Report{
-		At: time.Now().Add(-90 * time.Second), Window: time.Minute,
-		Class: "a>b", Kind: KindLeg, N: 60, Sent: 60, Got: 60, Fwd: 60, P50: 12.5,
+		At: time.Now().Add(-10*time.Minute - 30*time.Second), Window: 10 * time.Minute,
+		Class: "a>b", Kind: KindLeg, N: 600, Sent: 600, Got: 600, Fwd: 600, P50: 12.5,
 	})
 	legs := n.Legs()
 	if len(legs) != 1 {
 		t.Fatalf("legs = %v, want one", legs)
 	}
-	if legs[0].Class != "a>b" || legs[0].P50 != 12.5 || legs[0].Window != "1m" {
+	if legs[0].Class != "a>b" || legs[0].P50 != 12.5 || legs[0].Window != "10m" {
 		t.Errorf("leg = %+v", legs[0])
 	}
-	// The window closed thirty seconds ago: it ran from 90s ago to 30s ago.
+	// The window closed thirty seconds ago: it ran from 10m30s ago to 30s ago.
 	if legs[0].AgeSecs < 25 || legs[0].AgeSecs > 35 {
 		t.Errorf("age = %ds, want about 30", legs[0].AgeSecs)
 	}
 	if legs[0].Loss != 0 {
 		t.Errorf("loss = %v, want 0", legs[0].Loss)
+	}
+}
+
+// The health link reports the longest window configured, not the freshest. The
+// card that reads it stands for ten minutes and a one-minute percentile
+// describes one of them.
+func TestHealthReportsTheLongestWindow(t *testing.T) {
+	if got := longest([]time.Duration{time.Minute, 10 * time.Minute}); got != 10*time.Minute {
+		t.Errorf("longest = %v, want 10m", got)
+	}
+	if got := longest(nil); got != 0 {
+		t.Errorf("longest of nothing = %v", got)
 	}
 }

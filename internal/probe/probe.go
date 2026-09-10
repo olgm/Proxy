@@ -23,10 +23,12 @@ type Node struct {
 	interval time.Duration
 	timeout  time.Duration
 	windows  []time.Duration
-	// short is the shortest window configured, and the only one kept in memory
-	// for the health link: a status card wants the freshest figure there is, and
-	// the long window is what the dataset and the probe feed are for.
-	short time.Duration
+	// healthWindow is the longest window configured, and the only one kept in
+	// memory for the health link. The longest because the card that reads it
+	// stands for a long time: a one-minute percentile is fresher at the moment it
+	// is drawn, but it describes a minute, and the card describes the ten it will
+	// be sitting there for. It is the same rule the probe feed already follows.
+	healthWindow time.Duration
 
 	links   []*link
 	classes map[uint8]*class
@@ -144,15 +146,15 @@ func New(cfg Config) (*Node, error) {
 		return nil, err
 	}
 	n := &Node{
-		feed:     fd,
-		cfg:      cfg,
-		interval: time.Duration(float64(time.Second) / cfg.Hz),
-		timeout:  time.Duration(cfg.TimeoutMS) * time.Millisecond,
-		windows:  windows,
-		short:    shortest(windows),
-		classes:  map[uint8]*class{},
-		recent:   map[string]*Report{},
-		stop:     make(chan struct{}),
+		feed:         fd,
+		cfg:          cfg,
+		interval:     time.Duration(float64(time.Second) / cfg.Hz),
+		timeout:      time.Duration(cfg.TimeoutMS) * time.Millisecond,
+		windows:      windows,
+		healthWindow: longest(windows),
+		classes:      map[uint8]*class{},
+		recent:       map[string]*Report{},
+		stop:         make(chan struct{}),
 	}
 
 	// Two sockets at most, split the way the tunnel splits them: one bound, for
@@ -424,7 +426,7 @@ func (c *class) flush(now time.Time) {
 	c.mu.Unlock()
 
 	for _, r := range out {
-		if r.Window == c.n.short {
+		if r.Window == c.n.healthWindow {
 			c.n.keep(r)
 		}
 		if err := c.n.w.Write(record(r)); err != nil {
@@ -600,14 +602,14 @@ func (n *Node) Legs() []Leg {
 	return out
 }
 
-// shortest is the window the health link reports from.
-func shortest(ws []time.Duration) time.Duration {
+// longest is the window the health link reports from.
+func longest(ws []time.Duration) time.Duration {
 	if len(ws) == 0 {
 		return 0
 	}
 	s := ws[0]
 	for _, w := range ws[1:] {
-		if w < s {
+		if w > s {
 			s = w
 		}
 	}

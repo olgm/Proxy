@@ -30,8 +30,8 @@ type Health struct {
 	Node    string `json:"node"`
 	Classes int    `json:"classes"`
 	UpSecs  int64  `json:"up_seconds"`
-	// Legs is every class this node originates, with its newest short-window
-	// measurement. It is on the health answer because there is no other way for
+	// Legs is every class this node originates, with its newest measurement over
+	// the longest window configured. It is on the health answer because there is no other way for
 	// the bot to reach a number: the measurements are written to probed's log on
 	// the node, and a status card needs one latency per node without the dataset
 	// being shipped anywhere. A node that only answers probes reports none.
