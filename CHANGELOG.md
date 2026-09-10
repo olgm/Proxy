@@ -1,7 +1,17 @@
 # Changelog
 
-## Unreleased
+## v2.3.0 — 2026-09-10
 
+The status feed stops being a wall of text. `#status` now reads as a log of
+transitions with one live card pinned to the bottom of it, and the card is drawn
+here rather than assembled by whichever Discord client happens to be reading it.
+Nothing about the player path changed; `proxyd` is in this release only because it
+links the webhook client that grew attachment support.
+
+- **The beta role may list 5 accounts, not 3.** A `topology.json` change rather than
+  a code one — the cap has always come from `discord.roles[id].accounts` — recorded
+  here because that file is not in the repo and this is the only place the change
+  leaves a mark.
 - **The status feed is a card at the foot of the channel, with the log above it.**
   `#status` now ends in one PNG showing every node's services, its own leg to the
   exit with the latest p50 on it, who is online there, and a one-line verdict. With
