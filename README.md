@@ -722,13 +722,22 @@ which the state file remembers so a redeploy does not repeat every open fault.
 
 Turning this feed on gives `probed` one more thing: a small TCP port per node,
 sealed under a key of its own. It answers "I am running, with N classes", and the
-newest closed short window for each class the node originates — which is where the
-card's latencies come from, and the only way to a measurement without shipping the
-dataset off the node. A class that has measured nothing yet is listed with negative
-figures rather than left out, so an exit that originates nothing can be told from a
-`probed` that has just restarted. A window more than three windows old is not shown
-at all: a stopped `probed` keeps reporting its last one forever, and the card would
-rather say nothing than say something that stopped being true. `deploy` allocates
+newest closed window for each class the node originates — which is where the card's
+latencies come from, and the only way to a measurement without shipping the dataset
+off the node. It is the **longest** window configured, the same one the probe feed
+posts: a shorter one is fresher at the moment the card is drawn, but it describes a
+minute and the card describes the ten it will be sitting there for. The cost is
+that a freshly deployed `probed` shows no latency until its first long window
+closes.
+
+A class that has measured nothing yet is listed with negative figures rather than
+left out, so an exit that originates nothing can be told from a `probed` that has
+just restarted. Nothing is drawn for a window with no round trips behind it either:
+a window in which every probe was lost still closes, and its percentile is zero,
+which against a leg that carried nothing is the most wrong a latency can be. A
+window more than three windows old is not shown at all: a stopped `probed` keeps
+reporting its last one forever, and the card would rather say nothing than say
+something that stopped being true. `deploy` allocates
 the port, opens it to the bot's node only, and verifies it like any other link.
 Without `feeds.status` there is no port, because nothing would ever dial it. The
 key is `probed`'s and deliberately not the node's control key: holding it is not a

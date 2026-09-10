@@ -29,13 +29,18 @@
   which stays the default. It is the only mention this feed can make: everything
   else is suppressed, including anything in a fault that looks like a mention.
 - **The `probed` health link carries latency.** It already said "I am running, with
-  N classes"; it now also carries the newest closed short window for every class the
-  node originates — p50, loss, n, and how old it is. That is where the card's
-  numbers come from, and it is the only way to a measurement without shipping the
-  dataset off the node. A class that has measured nothing yet is listed with
-  negative figures rather than omitted, so an exit that originates nothing can be
-  told apart from a `probed` that has just restarted, and a window more than three
-  windows old is not shown: a stopped `probed` reports its last one forever.
+  N classes"; it now also carries the newest closed window for every class the node
+  originates — p50, loss, n, and how old it is. That is where the card's numbers
+  come from, and it is the only way to a measurement without shipping the dataset
+  off the node. It reports the longest window configured, the one the probe feed
+  already posts, because the card stands for ten minutes and a one-minute
+  percentile describes one of them; the cost is that a freshly deployed `probed`
+  shows no latency until its first long window closes. A class that has measured
+  nothing yet is listed with negative figures rather than omitted, so an exit that
+  originates nothing can be told apart from a `probed` that has just restarted, a
+  window with no round trips behind it is not drawn — every probe lost still closes
+  a window, and its percentile is zero — and a window more than three windows old
+  is not shown at all: a stopped `probed` reports its last one forever.
 - **The bot's state file no longer loses ids.** Two feeds keep message ids in
   `/var/lib/proxybot/feeds.json` and each wrote the whole file, so the roster's save
   every twenty seconds would have dropped the card's id and posted a new card each
