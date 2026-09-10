@@ -30,6 +30,30 @@ type Health struct {
 	Node    string `json:"node"`
 	Classes int    `json:"classes"`
 	UpSecs  int64  `json:"up_seconds"`
+	// Legs is every class this node originates, with its newest short-window
+	// measurement. It is on the health answer because there is no other way for
+	// the bot to reach a number: the measurements are written to probed's log on
+	// the node, and a status card needs one latency per node without the dataset
+	// being shipped anywhere. A node that only answers probes reports none.
+	Legs []Leg `json:"legs,omitempty"`
+}
+
+// Leg is one class's newest closed window. P50, N and AgeSecs are all negative
+// when no window has closed yet: a class that has measured nothing reports
+// nothing, and a zero would read as instant.
+type Leg struct {
+	Class  string  `json:"class"`
+	Kind   string  `json:"kind"`
+	Window string  `json:"window,omitempty"`
+	P50    float64 `json:"p50"`
+	// Loss is the round-trip figure as a percentage, the same one the feed
+	// reports.
+	Loss float64 `json:"loss"`
+	N    int     `json:"n"`
+	// AgeSecs is how long ago that window closed. A figure without its age
+	// cannot be told apart from a leg that stopped being measured an hour ago,
+	// which is exactly the case a status card has to get right.
+	AgeSecs int64 `json:"age_seconds"`
 }
 
 // HealthConfig is the link, when one is deployed. Absent means probed listens for
@@ -123,6 +147,7 @@ func (h *healthServer) handle(c net.Conn) {
 		Node:    h.node.cfg.Name,
 		Classes: len(h.node.classes),
 		UpSecs:  int64(time.Since(h.started).Seconds()),
+		Legs:    h.node.Legs(),
 	})
 	if err != nil {
 		return

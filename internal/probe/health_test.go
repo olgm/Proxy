@@ -3,6 +3,7 @@ package probe
 import (
 	"net"
 	"testing"
+	"time"
 
 	"github.com/olgm/proxy/internal/tunnel"
 )
@@ -87,5 +88,53 @@ func TestHealthAllowsLoopbackAndNamedAddressesOnly(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("allowed(%s) = %v, want %v", tc.ip, got, tc.want)
 		}
+	}
+}
+
+// A class that has not closed a window yet is still listed, with negative
+// figures. The bot needs the difference between that and a node that originates
+// nothing: the first has a latency coming, the second never will.
+func TestHealthListsAClassBeforeItHasMeasuredAnything(t *testing.T) {
+	c, _ := healthNode(t, nil)
+	h, err := c.Check()
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if len(h.Legs) != 1 {
+		t.Fatalf("legs = %v, want the one class configured", h.Legs)
+	}
+	if h.Legs[0].Class != "a>b" {
+		t.Errorf("class = %q, want a>b", h.Legs[0].Class)
+	}
+	if h.Legs[0].P50 >= 0 || h.Legs[0].N >= 0 || h.Legs[0].AgeSecs >= 0 {
+		t.Errorf("a class with no closed window reported figures: %+v", h.Legs[0])
+	}
+}
+
+// Once a window has closed, the class it belongs to is on the health answer with
+// its age, which is the whole reason the link carries it.
+func TestHealthReportsTheNewestWindow(t *testing.T) {
+	n := &Node{
+		short:   time.Minute,
+		recent:  map[string]*Report{},
+		classes: map[uint8]*class{1: {Class: Class{Name: "a>b", Kind: KindLeg}, down: []hop{{}}}},
+	}
+	n.keep(&Report{
+		At: time.Now().Add(-90 * time.Second), Window: time.Minute,
+		Class: "a>b", Kind: KindLeg, N: 60, Sent: 60, Got: 60, Fwd: 60, P50: 12.5,
+	})
+	legs := n.Legs()
+	if len(legs) != 1 {
+		t.Fatalf("legs = %v, want one", legs)
+	}
+	if legs[0].Class != "a>b" || legs[0].P50 != 12.5 || legs[0].Window != "1m" {
+		t.Errorf("leg = %+v", legs[0])
+	}
+	// The window closed thirty seconds ago: it ran from 90s ago to 30s ago.
+	if legs[0].AgeSecs < 25 || legs[0].AgeSecs > 35 {
+		t.Errorf("age = %ds, want about 30", legs[0].AgeSecs)
+	}
+	if legs[0].Loss != 0 {
+		t.Errorf("loss = %v, want 0", legs[0].Loss)
 	}
 }

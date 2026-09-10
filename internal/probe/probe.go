@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,13 +23,24 @@ type Node struct {
 	interval time.Duration
 	timeout  time.Duration
 	windows  []time.Duration
+	// short is the shortest window configured, and the only one kept in memory
+	// for the health link: a status card wants the freshest figure there is, and
+	// the long window is what the dataset and the probe feed are for.
+	short time.Duration
 
 	links   []*link
 	classes map[uint8]*class
-	socks   []*socket
-	w       *jsonl.Writer
-	feed    *feed
-	health  net.Listener
+
+	// recentMu guards recent, the newest closed short-window report for each
+	// class this node originates. It is kept in memory for one reader: the
+	// health link, which is how the bot gets a latency without being shipped the
+	// dataset. Nothing else reads it and losing it costs one window.
+	recentMu sync.Mutex
+	recent   map[string]*Report
+	socks    []*socket
+	w        *jsonl.Writer
+	feed     *feed
+	health   net.Listener
 
 	stop     chan struct{}
 	stopOnce sync.Once
@@ -137,7 +149,9 @@ func New(cfg Config) (*Node, error) {
 		interval: time.Duration(float64(time.Second) / cfg.Hz),
 		timeout:  time.Duration(cfg.TimeoutMS) * time.Millisecond,
 		windows:  windows,
+		short:    shortest(windows),
 		classes:  map[uint8]*class{},
+		recent:   map[string]*Report{},
 		stop:     make(chan struct{}),
 	}
 
@@ -410,6 +424,9 @@ func (c *class) flush(now time.Time) {
 	c.mu.Unlock()
 
 	for _, r := range out {
+		if r.Window == c.n.short {
+			c.n.keep(r)
+		}
 		if err := c.n.w.Write(record(r)); err != nil {
 			log.Printf("%s: probe log: %v", c.n.cfg.Name, err)
 		}
@@ -549,4 +566,50 @@ func (s *socket) read() {
 		l.seen.Store(time.Now().UnixNano())
 		s.n.handle(l, p)
 	}
+}
+
+// keep records the newest short-window report for a class, for the health link.
+func (n *Node) keep(r *Report) {
+	n.recentMu.Lock()
+	defer n.recentMu.Unlock()
+	n.recent[r.Class] = r
+}
+
+// Legs is every class this node originates, with its newest closed window when
+// there is one. A class with nothing measured yet is listed all the same, with
+// negative figures: "configured but silent" and "not configured here" are
+// different states, and a reader that cannot tell them apart cannot tell an exit
+// node from one whose probed has just restarted.
+func (n *Node) Legs() []Leg {
+	n.recentMu.Lock()
+	defer n.recentMu.Unlock()
+	out := make([]Leg, 0, len(n.classes))
+	for _, c := range n.classes {
+		if !c.originates() {
+			continue
+		}
+		l := Leg{Class: c.Name, Kind: c.Kind, P50: -1, N: -1, AgeSecs: -1}
+		if r, ok := n.recent[c.Name]; ok {
+			_, _, rt := r.Loss()
+			l.Window, l.P50, l.Loss, l.N = dur(r.Window), r.P50, rt, r.N
+			l.AgeSecs = int64(time.Since(r.At.Add(r.Window)).Seconds())
+		}
+		out = append(out, l)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Class < out[j].Class })
+	return out
+}
+
+// shortest is the window the health link reports from.
+func shortest(ws []time.Duration) time.Duration {
+	if len(ws) == 0 {
+		return 0
+	}
+	s := ws[0]
+	for _, w := range ws[1:] {
+		if w < s {
+			s = w
+		}
+	}
+	return s
 }
