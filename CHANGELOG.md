@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+- **The status feed is a card at the foot of the channel, with the log above it.**
+  `#status` now ends in one PNG showing every node's services, its own leg to the
+  exit with the latest p50 on it, who is online there, and a one-line verdict. With
+  nothing to report it is edited in place once a minute — matched to the shortest
+  probe window, which is the soonest any number on it can have moved. When
+  something does change the card is deleted, the transition is posted, and a new
+  card goes up below it, because Discord cannot move a message and a card that is
+  not last is a card nobody sees first.
+
+  It is an image rather than an embed on purpose. An embed is laid out by whichever
+  client is reading it, and the five columns that make the card scannable collapse
+  on a narrow phone into a paragraph. It is drawn in `cmd/proxybot/card.go` from the
+  geometry of the mockup it was designed in, in Go Mono — which `golang.org/x/image`
+  ships as bytes, so a node needs no font installed and the repo carries no `.ttf`.
+  That module is the one new dependency, and only `proxybot` links it; `proxyd` and
+  `probed` are still dependency-free. It moves the go directive to 1.25.
+- **A transition is announced once and then quietened.** A fault stands in full for
+  as long as it is open. On recovery both halves of the incident — the line that
+  raised it and the line that closed it — are edited down to `> -# …`, small and
+  grey, because an incident that is over should not look like one that is not.
+  Editing does not notify anyone, so nothing rings twice.
+- **`feeds.status.ping_role` pings a role on a transition.** Unset pings nobody,
+  which stays the default. It is the only mention this feed can make: everything
+  else is suppressed, including anything in a fault that looks like a mention.
+- **The `probed` health link carries latency.** It already said "I am running, with
+  N classes"; it now also carries the newest closed short window for every class the
+  node originates — p50, loss, n, and how old it is. That is where the card's
+  numbers come from, and it is the only way to a measurement without shipping the
+  dataset off the node. A class that has measured nothing yet is listed with
+  negative figures rather than omitted, so an exit that originates nothing can be
+  told apart from a `probed` that has just restarted, and a window more than three
+  windows old is not shown: a stopped `probed` reports its last one forever.
+- **The bot's state file no longer loses ids.** Two feeds keep message ids in
+  `/var/lib/proxybot/feeds.json` and each wrote the whole file, so the roster's save
+  every twenty seconds would have dropped the card's id and posted a new card each
+  time. Every write is now a read-modify-write under one lock. The file also holds
+  faults that have been announced and not yet recovered, so a redeploy does not
+  re-announce every open one.
+
 - `trial.example.json`: the ty-b node is `198.51.100.22`, and the two legs that
   reach it now expect 44 ms and 121 ms rather than 70 and 128. ty-b replaced the
   service's primary address on 2026-09-09. The old one sat in `198.51.100.0/22`, a

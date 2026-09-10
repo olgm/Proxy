@@ -81,6 +81,7 @@ the feed but a join that never left.
 | `feeds.<name>.webhook_env` | environment variable holding that feed's webhook URL |
 | `feeds.probe.windows` | which probe windows reach the channel. Default: the longest |
 | `feeds.online.nodes` | order entries appear in the roster |
+| `feeds.status.ping_role` | role id a transition pings. Default: ping nobody |
 
 Hop ports are allocated automatically, and so is one control port per entry with a
 whitelist. `config` prints the map.
@@ -549,7 +550,7 @@ Who posts a feed is not a setting, because it follows from who can see it:
 | `sessions` | `proxyd` | every ingress, about its own node only |
 | `probe` | `probed` | every node that originates a class |
 | `online` | `proxybot` | one message, edited in place, across every entry |
-| `status` | `proxybot` | node and service transitions, watched from outside |
+| `status` | `proxybot` | a card at the foot of the channel, and the transitions above it |
 
 ### sessions
 
@@ -664,21 +665,47 @@ timestamp up on its own without anything being edited.
 Only the bot can build this. A node knows its own sessions and no others, so it
 asks all four over their control links and joins the answers.
 
-To do that it keeps one thing between restarts — the id of the message — in
-`/var/lib/proxybot/feeds.json`. It is not a source of truth for anything: losing
-it costs one duplicate message, and the whitelist files remain the only state that
-matters.
+To do that it keeps a little between restarts in `/var/lib/proxybot/feeds.json`:
+the ids of the two messages it edits in place, and any fault it has announced and
+not yet seen recover. It is not a source of truth for anything: losing it costs a
+duplicate message and a repeated alarm, and the whitelist files remain the only
+state that matters.
 
 ### status
 
-Node and service transitions. The bot posts these because a node that is down
-cannot report that it is down:
+One channel with two things in it: a card at the foot showing the whole chain at a
+glance, and above it the log of what changed to get there.
 
 ```
-**ty** proxyd is down (the node answers, its control port does not)
-**hk** unreachable — no answer from the node at all
-**ty** recovered
+> -# `ty` is offline — probed is down
+> -# `ty` is online
+`ch` is offline — no answer from the node at all
+[ the card ]
 ```
+
+The bot posts both, because a node that is down cannot report that it is down.
+
+**The card is always the last message.** With nothing to report it is edited where
+it stands, once a minute, refreshing the latencies and the clock in its corner.
+When something does change the card is deleted, the transition is posted, and a new
+card goes up underneath it — which is the only way Discord will keep it at the
+foot, since a message cannot be moved. It is a PNG rather than an embed: an embed
+is laid out by whichever client is reading it, and the columns that make the card
+scannable collapse on a phone into a paragraph nobody reads. It is drawn in
+`cmd/proxybot/card.go` in Go Mono, which `x/image` ships as bytes, so nothing has
+to be installed on the node.
+
+**A transition is posted once and then quietened.** A fault stands in full for as
+long as it is open. When the node recovers, the recovery is posted and both halves
+of the incident — the line that raised it and the line that closed it — are edited
+down to `> -# …`, which Discord draws small and grey. An incident that is over
+should not look like one that is not. Editing never notifies anyone, so the ping
+that went with the original is not repeated.
+
+`feeds.status.ping_role` names a Discord role id that a transition mentions. Unset,
+nothing is ever pinged, which is the default. That role is the only mention this
+feed can ever make: everything else stays suppressed, including anything inside a
+fault that happens to look like one.
 
 Every 20 seconds the bot dials each entry's control link and each node's `probed`
 health link. A **refused** connection is the kernel saying the host is there and
@@ -689,14 +716,22 @@ did not answer at all is not then asked about `probed`, so one fault is one line
 A change has to hold for three dials — about a minute — before anything is
 posted, so a single dropped packet is not an outage. A fault that is already there
 when the bot starts is announced immediately, because a node that was down before
-the bot came up is still news.
+the bot came up is still news — unless it was already announced before a restart,
+which the state file remembers so a redeploy does not repeat every open fault.
 
 Turning this feed on gives `probed` one more thing: a small TCP port per node,
-sealed under a key of its own, answering nothing but "I am running, with N
-classes". `deploy` allocates it, opens it to the bot's node only, and verifies it
-like any other link. Without `feeds.status` there is no port, because nothing
-would ever dial it. The key is `probed`'s and deliberately not the node's control
-key: holding it is not a way into a session.
+sealed under a key of its own. It answers "I am running, with N classes", and the
+newest closed short window for each class the node originates — which is where the
+card's latencies come from, and the only way to a measurement without shipping the
+dataset off the node. A class that has measured nothing yet is listed with negative
+figures rather than left out, so an exit that originates nothing can be told from a
+`probed` that has just restarted. A window more than three windows old is not shown
+at all: a stopped `probed` keeps reporting its last one forever, and the card would
+rather say nothing than say something that stopped being true. `deploy` allocates
+the port, opens it to the bot's node only, and verifies it like any other link.
+Without `feeds.status` there is no port, because nothing would ever dial it. The
+key is `probed`'s and deliberately not the node's control key: holding it is not a
+way into a session.
 
 ## Firewall
 
