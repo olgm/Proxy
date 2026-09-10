@@ -1,11 +1,9 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -20,67 +18,24 @@ import (
 // not an editing one.
 const rosterEvery = 20 * time.Second
 
-// statePath is the one thing the bot remembers between restarts: the id of the
-// roster message, so it edits that message rather than posting a new one every
-// time it starts. It is deliberately not a second source of truth for anything —
-// losing it costs one duplicate message and nothing else.
-const statePath = "/var/lib/proxybot/feeds.json"
-
-type state struct {
-	OnlineMessage string `json:"online_message,omitempty"`
-}
-
-func loadState(path string) state {
-	var s state
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return s // no file yet is the normal first run
-	}
-	if err := json.Unmarshal(b, &s); err != nil {
-		log.Printf("state: %s: %v; starting a new message", path, err)
-	}
-	return s
-}
-
-// save writes through a temporary file, so a crash mid-write cannot leave a
-// truncated id that would be read back as "no message".
-func saveState(path string, s state) {
-	b, err := json.Marshal(s)
-	if err != nil {
-		return
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		log.Printf("state: %s: %v", path, err)
-		return
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		log.Printf("state: %s: %v", path, err)
-	}
-}
-
 // roster keeps one message showing who is online across every entry. Only the
 // bot can build it: a node knows its own sessions and no others.
 type roster struct {
 	ch    *chain
 	c     *webhook.Client
 	order []string
-	path  string
+	st    *store
 
 	id   string
 	last string // the last body posted, so an unchanged roster is not re-edited
 }
 
-func newRoster(ch *chain, order []string, path string) *roster {
+func newRoster(ch *chain, order []string, st *store) *roster {
 	url := os.Getenv(botcfg.EnvOnlineWebhook)
 	if url == "" {
 		return nil
 	}
-	st := loadState(path)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		log.Printf("state: %v", err)
-	}
-	return &roster{ch: ch, c: webhook.New(url), order: order, path: path, id: st.OnlineMessage}
+	return &roster{ch: ch, c: webhook.New(url), order: order, st: st, id: st.get().OnlineMessage}
 }
 
 // run redraws the roster forever. Nil when no webhook was configured, and a nil
@@ -125,7 +80,7 @@ func (r *roster) publish(body string) error {
 		return err
 	}
 	r.id = id
-	saveState(r.path, state{OnlineMessage: id})
+	r.st.update(func(s *state) { s.OnlineMessage = id })
 	return nil
 }
 

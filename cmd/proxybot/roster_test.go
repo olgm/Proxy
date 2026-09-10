@@ -138,7 +138,7 @@ func (c *editCapture) counts() (int, int) {
 
 func testRoster(t *testing.T, url string) *roster {
 	t.Helper()
-	return &roster{c: webhook.New(url), path: filepath.Join(t.TempDir(), "feeds.json")}
+	return &roster{c: webhook.New(url), st: openStore(filepath.Join(t.TempDir(), "feeds.json"))}
 }
 
 // The first draw posts and remembers the id; the next one edits that message
@@ -161,7 +161,7 @@ func TestRosterEditsRatherThanReposting(t *testing.T) {
 		t.Fatalf("message id = %q", r.id)
 	}
 	// And it survives a restart, which is the only reason the file exists.
-	if got := loadState(r.path).OnlineMessage; got != "777" {
+	if got := openStore(r.st.path).get().OnlineMessage; got != "777" {
 		t.Fatalf("state file holds %q", got)
 	}
 }
@@ -189,7 +189,7 @@ func TestRosterRepostsWhenTheMessageIsGone(t *testing.T) {
 // A roster nobody configured is nil, and a nil roster is simply never drawn.
 func TestNoRosterIsNoRoster(t *testing.T) {
 	t.Setenv("PROXYBOT_ONLINE_WEBHOOK", "")
-	if r := newRoster(nil, nil, filepath.Join(t.TempDir(), "s.json")); r != nil {
+	if r := newRoster(nil, nil, openStore(filepath.Join(t.TempDir(), "s.json"))); r != nil {
 		t.Fatal("an unset URL produced a roster")
 	}
 }
