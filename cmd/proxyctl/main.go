@@ -83,9 +83,10 @@ type Feeds struct {
 	Probe *ProbeFeed `json:"probe,omitempty"`
 	// Online is the roster: one message the bot keeps up to date in place.
 	Online *OnlineFeed `json:"online,omitempty"`
-	// Status is node and service transitions. The bot posts it because a node
-	// that is down cannot report that it is down.
-	Status *Feed `json:"status,omitempty"`
+	// Status is the card at the foot of the channel and the transitions above
+	// it. The bot posts it because a node that is down cannot report that it is
+	// down.
+	Status *StatusFeed `json:"status,omitempty"`
 }
 
 // Feed is the one thing every feed needs: where to post.
@@ -105,6 +106,17 @@ type Feed struct {
 type ProbeFeed struct {
 	Feed
 	Windows []string `json:"windows,omitempty"`
+}
+
+// StatusFeed names the role a transition pings. Nothing else about the status
+// feed is configurable: what is worth saying follows from what happened, and a
+// threshold nobody set is one nobody has to keep right.
+type StatusFeed struct {
+	Feed
+	// PingRole is a Discord role id, notified when a node changes state. Unset
+	// pings nobody, which is the default: a channel that pings on every deploy
+	// stops being read.
+	PingRole string `json:"ping_role,omitempty"`
 }
 
 // OnlineFeed sets the order entry nodes appear in the roster. A node not named
@@ -143,7 +155,9 @@ func (f *Feeds) named() []struct {
 	if f.Online != nil {
 		add("online", &f.Online.Feed)
 	}
-	add("status", f.Status)
+	if f.Status != nil {
+		add("status", &f.Status.Feed)
+	}
 	return out
 }
 
@@ -729,6 +743,9 @@ func botConfig(t *Topology, cfgs map[string]*proxy.Config, pcfgs map[string]*pro
 		Primary:      t.primary(),
 		OnlineNodes:  t.onlineOrder(),
 	}
+	if t.Feeds != nil && t.Feeds.Status != nil {
+		bc.StatusPing = t.Feeds.Status.PingRole
+	}
 	for _, name := range t.whitelistedEntries() {
 		c := cfgs[name].Control
 		_, port, _ := net.SplitHostPort(c.Bind)
@@ -1103,7 +1120,11 @@ func printFeeds(t *Topology, cfgs map[string]*proxy.Config, pcfgs map[string]*pr
 		line("online", "proxybot", f.WebhookEnv, []string{t.botNode()}, "order "+strings.Join(t.onlineOrder(), " "))
 	}
 	if f := t.Feeds.Status; f != nil {
-		line("status", "proxybot", f.WebhookEnv, []string{t.botNode()}, "")
+		note := "pings nobody"
+		if f.PingRole != "" {
+			note = "pings role " + f.PingRole
+		}
+		line("status", "proxybot", f.WebhookEnv, []string{t.botNode()}, note)
 	}
 	fmt.Println()
 }
@@ -1285,7 +1306,7 @@ func deployBot(t *Topology, cfgs map[string]*proxy.Config, pcfgs map[string]*pro
 			vars[envOnlineWebhook] = &t.Feeds.Online.Feed
 		}
 		if t.Feeds.Status != nil {
-			vars[envStatusWebhook] = t.Feeds.Status
+			vars[envStatusWebhook] = &t.Feeds.Status.Feed
 		}
 	}
 	feeds, err := feedEnv(vars)

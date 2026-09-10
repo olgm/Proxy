@@ -34,6 +34,9 @@ type Config struct {
 	// Probes are the probed health links, one per node running it. Present only
 	// when the status feed is configured, because nothing else dials them.
 	Probes []Probed `json:"probes,omitempty"`
+	// StatusPing is the role id a node transition notifies. Empty pings nobody,
+	// which is what a chain nobody is on call for wants.
+	StatusPing string `json:"status_ping,omitempty"`
 }
 
 // Probed is one node's probed health link, with the key it holds. Separate from

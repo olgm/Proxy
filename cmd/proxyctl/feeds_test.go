@@ -42,7 +42,7 @@ func TestFeedsNeedSomethingToPostThem(t *testing.T) {
 			top.Discord = nil
 		}},
 		{"status without a bot", func(top *Topology) {
-			top.Feeds = &Feeds{Status: &Feed{WebhookEnv: "W"}}
+			top.Feeds = &Feeds{Status: &StatusFeed{Feed: Feed{WebhookEnv: "W"}}}
 			top.Discord = nil
 		}},
 		{"a window probed does not keep", func(top *Topology) {
