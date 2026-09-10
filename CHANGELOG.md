@@ -5,9 +5,11 @@
 - **The status feed is a card at the foot of the channel, with the log above it.**
   `#status` now ends in one PNG showing every node's services, its own leg to the
   exit with the latest p50 on it, who is online there, and a one-line verdict. With
-  nothing to report it is edited in place once a minute — matched to the shortest
-  probe window, which is the soonest any number on it can have moved. When
-  something does change the card is deleted, the transition is posted, and a new
+  nothing to report it is edited in place every ten minutes, which is a slow timer
+  on purpose: a quiet redraw is a fresh upload that says the same thing, and
+  anything worth knowing is a transition. A transition never waits for it and
+  redraws the card the moment it is announced. When something does change the card
+  is deleted, the transition is posted, and a new
   card goes up below it, because Discord cannot move a message and a card that is
   not last is a card nobody sees first.
 

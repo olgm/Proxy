@@ -26,10 +26,12 @@ const (
 	statusStrikes = 3
 
 	// boardEvery is how often the card is redrawn when nothing has changed. It
-	// is the shortest probe window, because that is the soonest the latency on
-	// it can have moved: the card is an upload every time it is redrawn, and
-	// redrawing faster than the numbers change uploads the same picture twice.
-	boardEvery = time.Minute
+	// is long because a quiet redraw is worth very little: the card is a fresh
+	// upload every time, and nothing on a quiet chain moves enough in ten
+	// minutes to be worth 144 of them a day. Anything actually worth knowing is
+	// a transition, and a transition does not wait for this — it redraws the
+	// card the moment it is announced.
+	boardEvery = 10 * time.Minute
 
 	// staleWindows is how many windows old a latency may be before the card
 	// stops showing it. A figure with no window behind it any more is not a

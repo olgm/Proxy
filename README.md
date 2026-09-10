@@ -686,9 +686,10 @@ glance, and above it the log of what changed to get there.
 The bot posts both, because a node that is down cannot report that it is down.
 
 **The card is always the last message.** With nothing to report it is edited where
-it stands, once a minute, refreshing the latencies and the clock in its corner.
-When something does change the card is deleted, the transition is posted, and a new
-card goes up underneath it — which is the only way Discord will keep it at the
+it stands every ten minutes, refreshing the latencies and the clock in its corner.
+Nothing is waiting on that timer: anything worth knowing is a transition, and a
+transition redraws the card immediately. When something does change the card is
+deleted, the transition is posted, and a new card goes up underneath it — which is the only way Discord will keep it at the
 foot, since a message cannot be moved. It is a PNG rather than an embed: an embed
 is laid out by whichever client is reading it, and the columns that make the card
 scannable collapse on a phone into a paragraph nobody reads. It is drawn in
