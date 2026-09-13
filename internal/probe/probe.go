@@ -433,8 +433,11 @@ func (c *class) flush(now time.Time) {
 			log.Printf("%s: probe log: %v", c.n.cfg.Name, err)
 		}
 		_, _, rt := r.Loss()
-		log.Printf("%s: probe %s dup=%d w=%s rtt=%.1fms mdev=%.1fms loss=%.1f%% n=%d",
-			c.n.cfg.Name, r.Class, r.Dup, dur(r.Window), r.P50, r.Mdev, rt, r.N)
+		// The kind is on the line because a class name does not identify a class
+		// on its own: a route raced over two paths is a chain named for its ends,
+		// and one of those ends may also be a leg of it. ty2>ch is both.
+		log.Printf("%s: probe %s %s dup=%d w=%s rtt=%.1fms mdev=%.1fms loss=%.1f%% n=%d",
+			c.n.cfg.Name, r.Class, r.Kind, r.Dup, dur(r.Window), r.P50, r.Mdev, rt, r.N)
 		c.n.feed.post(r)
 	}
 }

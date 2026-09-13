@@ -1562,12 +1562,13 @@ journalctl -u proxyd -n 400 --no-pager -o cat 2>/dev/null |
 	}
 	if t.Probe != nil {
 		for _, name := range sortedNodes(t) {
-			// The newest line per class, keyed on the class name, so a leg
-			// measured at two counts reports both.
+			// The newest line per class, keyed on name, kind, count and window
+			// together: a leg measured at two counts reports both, and so do a
+			// leg and a chain that share a name.
 			out, _ := ssh(t.Nodes[name].SSH, versionLine("probed")+`
 systemctl is-active probed 2>&1 | grep -q '^active' || exit 0
 journalctl -u probed -n 400 --no-pager -o cat 2>/dev/null |
-  awk '/ probe /{for(i=1;i<=NF;i++) if($i=="probe"){last[$(i+1)" "$(i+2)" "$(i+3)]=$0}}
+  awk '/ probe /{for(i=1;i<=NF;i++) if($i=="probe"){last[$(i+1)" "$(i+2)" "$(i+3)" "$(i+4)]=$0}}
        END{for(k in last) print last[k]}' |
   sort || true`)
 			ver, rest := splitVersion(out)

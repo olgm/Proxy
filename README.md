@@ -1008,8 +1008,8 @@ runs.
 
 ```
 == hk probe
-   hk: probe hk>ty2 dup=1 w=1m rtt=44.0ms mdev=0.2ms loss=0.0% n=60
-   hk: probe hk>ch dup=1 w=1m rtt=165.4ms mdev=0.5ms loss=0.0% n=60
+   hk: probe hk>ty2 leg dup=1 w=1m rtt=44.0ms mdev=0.2ms loss=0.0% n=60
+   hk: probe hk>ch chain dup=1 w=1m rtt=165.4ms mdev=0.5ms loss=0.0% n=60
 ```
 
 `deploy` opens one UDP port per node anything is probed toward and verifies it the
