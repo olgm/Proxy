@@ -544,3 +544,49 @@ func TestEntryIsToldHowManyLegsItIsFromTheExit(t *testing.T) {
 		}
 	}
 }
+
+// Only the exit may hold the target address. Everything else hands the stream to
+// the tunnel, so the backend only ever sees the exit's IP — which is the whole of
+// the egress-reputation model in agents/operational-safety.md. The shape that
+// makes this worth a test is the raced one: a route with a relay in the middle of
+// one path and an ingress that is its own exit on another, where "the last node
+// named" and "the exit" are no longer the same thing.
+func TestOnlyTheExitDialsTheTarget(t *testing.T) {
+	top := topo(
+		// hk races two ways into chi, one of them through a node that is neither
+		// an ingress nor an exit.
+		Route{Name: "raced", Entry: "hk", Port: 30001, Transport: "udp", Duplicate: 1,
+			Exit: "chi", Target: hypixel(),
+			Paths: []Path{{Via: []string{"ty"}}, {Via: []string{"ty", "sg"}}}},
+		// and chi is an ingress of its own, dialling the backend itself.
+		Route{Name: "direct", Entry: "chi", Port: 30002, Exit: "chi", Target: hypixel()},
+	)
+	cfgs, _ := expandOK(t, top)
+
+	target := hypixel().Addr
+	for node, c := range cfgs {
+		for _, l := range c.Listeners {
+			dials := l.Upstream == target
+			if dials && node != "chi" {
+				t.Errorf("%s: listener %s dials the target; only the exit may", node, l.Bind)
+			}
+			if !dials && l.Upstream != "" {
+				t.Errorf("%s: listener %s dials %q, which is neither the target nor a hop",
+					node, l.Bind, l.Upstream)
+			}
+			// A listener hands on exactly one way: to an upstream, or to the
+			// tunnel. proxyd rejects a config with both, and nothing here may
+			// produce one.
+			if (l.Upstream == "") == (len(l.Hops) == 0) {
+				t.Errorf("%s: listener %s has upstream=%q and %d hops; want exactly one",
+					node, l.Bind, l.Upstream, len(l.Hops))
+			}
+		}
+	}
+	// The relay in the middle of the raced path is the case this test exists for.
+	for _, l := range cfgs["sg"].Listeners {
+		if l.Upstream != "" || l.Minecraft != nil {
+			t.Errorf("sg is a pure relay: upstream=%q minecraft=%v", l.Upstream, l.Minecraft != nil)
+		}
+	}
+}
