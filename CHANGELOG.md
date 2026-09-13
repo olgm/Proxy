@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.3.3 — 2026-09-13
+
+The release v2.3.2 should have been. Nothing a node runs behaves differently; the
+number moves so that the revision stamped into a deployed binary belongs to a tag
+rather than to a commit one past one.
+
+- **Only the exit may name the target, and now something checks.** The backend
+  seeing none of our addresses but the exit's is the whole egress-reputation model,
+  and it rested on reading `expandUDP` carefully. It rests on a test now, written
+  against the shape that makes it easy to get wrong: a raced path with a relay in
+  the middle, where the last node named and the exit are no longer the same node.
+
 ## v2.3.2 — 2026-09-13
 
 The Hong Kong chain stops depending on one road out of Tokyo. `ty2` now races two
