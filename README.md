@@ -6,10 +6,10 @@ packet is replaced by the node before it rather than by the far end.
 Legs run over plain TCP or over a UDP tunnel, per route. The tunnel can send every
 packet more than once, and down more than one path at a time.
 
-Targets Hypixel. Deployed today on four nodes — Hong Kong, Tokyo, Sydney and
-Chicago — every one of them an ingress, all four converging on the Chicago exit.
-HK goes through Tokyo; Tokyo and Sydney go straight to Chicago; Chicago dials the
-backend itself. Every hop leg is UDP with every packet doubled.
+Targets Hypixel. Deployed today on five nodes — Hong Kong, two in Tokyo, Sydney
+and Chicago — every one of them an ingress, all five converging on the Chicago
+exit. HK goes through the second Tokyo node; both Tokyos and Sydney go straight to
+Chicago; Chicago dials the backend itself. Every hop leg is UDP with every packet doubled.
 
 ## Design
 
@@ -663,7 +663,7 @@ has not moved in an hour is still a correct one, and Discord counts the relative
 timestamp up on its own without anything being edited.
 
 Only the bot can build this. A node knows its own sessions and no others, so it
-asks all four over their control links and joins the answers.
+asks all five over their control links and joins the answers.
 
 To do that it keeps a little between restarts in `/var/lib/proxybot/feeds.json`:
 the ids of the two messages it edits in place, and any fault it has announced and
@@ -908,7 +908,8 @@ Two things fall out of that and are not oversights:
   the production class would be the same measurement under two names. Since the
   fleet went to `duplicate: 1` that is every class it has.
 - **A route of exactly one leg gets no end-to-end class.** It would be its leg
-  class again. Today only Hong Kong has a chain; Tokyo and Sydney are one leg each.
+  class again. Today only Hong Kong has a chain; both Tokyos and Sydney are one
+  leg each.
 
 `proxyctl config` prints the whole map:
 
