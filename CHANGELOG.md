@@ -1,5 +1,36 @@
 # Changelog
 
+## v2.3.2 — 2026-09-13
+
+The Hong Kong chain stops depending on one road out of Tokyo. `ty2` now races two
+paths into the Chicago exit — straight there, and through a second Chicago box that
+relays and nothing else — so the exit takes whichever copy arrives first and the
+nightly reroute on the direct leg stops being something a player can feel.
+
+- **`ch2` joins as the first pure relay.** No ingress, no whitelist, no control
+  link, and it never dials the backend: it forwards for `ty2` and answers `ch`.
+  Roles stay emergent — it is a node whose listeners have no `minecraft` block and
+  no target, which needed no code.
+- **Two routes race instead of taking one path.** `hypixel-hk` is now
+  `hk → ty2 → {ch, ch2 → ch}` and `hypixel-ty2` the same with the first hop
+  removed. Measured, the raced path costs 122.45 + 1.8 ≈ 124.2 ms against the
+  direct leg's 121.4 clean and 126–130 on NTT, so the chain's median does not move
+  and its overnight tail is capped around 124 instead of 130. `ch↔ch2` is
+  1.53/1.77/5.19 ms, 0% loss over 30 probes — the one leg in this design nothing
+  had ever measured.
+- **A stalling relay is now harmless, which is why this box is usable at all.** The
+  ty-a host is Hyper-V and stalls for whole seconds a few times a day; that ruled
+  it out as an exit and does not rule it out as one of two raced paths, because the
+  direct path carries the stream while it is away.
+- **`proxyctl status` stopped hiding a class.** Its lines were keyed on name, count
+  and window, and a raced route makes a chain whose name matches one of its own
+  legs — `ty2>ch` is both. Both were written and only one was shown. The kind is on
+  `probed`'s line now and in the key.
+- **The trial mesh measures the race.** `trial.json` is the three nodes the race
+  runs over, flooding both paths from `ty2` and back from `ch`, because probed
+  de-duplicates by construction and so can never say which path won or by how much.
+  Delete it once the race has been watched for a few nights.
+
 ## v2.3.1 — 2026-09-13
 
 A second Tokyo node. ty-b Tokyo joins as `ty2`, taking the Hong Kong chain's
