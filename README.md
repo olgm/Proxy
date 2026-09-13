@@ -9,7 +9,8 @@ packet more than once, and down more than one path at a time.
 Targets Hypixel. Deployed today on five nodes — Hong Kong, two in Tokyo, Sydney
 and Chicago — every one of them an ingress, all five converging on the Chicago
 exit. HK goes through the second Tokyo node; both Tokyos and Sydney go straight to
-Chicago; Chicago dials the backend itself. Every hop leg is UDP with every packet doubled.
+Chicago; Chicago dials the backend itself. Every hop leg is UDP, carrying one
+copy of each packet.
 
 ## Design
 
@@ -627,7 +628,7 @@ of two counters, and the earlier one comes from the window before.
 nothing about what is measured or logged, and the dataset keeps every window
 either way. The default is the longest one configured, which is the only one
 whose p99 has enough samples behind it to mean anything. Without a filter the
-four classes Hong Kong originates would post eight messages a minute.
+two classes Hong Kong originates would post four messages a minute.
 
 Only a node that originates a class posts. Chicago answers everything and
 measures nothing, so it is never given the URL.
@@ -967,21 +968,22 @@ the rate up when that is the question being asked.
 ### What it costs
 
 A request is 66 bytes on the wire and an answer 82, IP and UDP headers included.
-At the default 1 Hz on the deployed four-node topology:
+At the default 1 Hz on the deployed five-node topology, every class at one copy:
 
 | leg | datagrams/s | per day | per 30 days |
 | --- | --- | --- | --- |
-| HK→TY | 12 | 77 MB | 2.3 GB |
-| TY→CH | 12 | 77 MB | 2.3 GB |
-| AU→CH | 6 | 38 MB | 1.2 GB |
-| **all** | **30** | **192 MB** | **5.8 GB** |
+| HK→TY2 | 4 | 26 MB | 0.8 GB |
+| TY2→CH | 4 | 26 MB | 0.8 GB |
+| TY→CH | 2 | 13 MB | 0.4 GB |
+| AU→CH | 2 | 13 MB | 0.4 GB |
+| **all** | **12** | **77 MB** | **2.3 GB** |
 
 That is what crosses the wire; each end bills what it sends and what it receives,
-so budget roughly double across the four nodes. For scale, one Minecraft session is
+so budget roughly double across the five nodes. For scale, one Minecraft session is
 tens of KB/s, so the whole measurement is a few percent of a single player.
 
-**28,800 probes an hour** fleet-wide: 14,400 from Hong Kong, which originates four
-classes, and 7,200 each from Tokyo and Sydney.
+**18,000 probes an hour** fleet-wide: 7,200 from Hong Kong, which originates two
+classes, and 3,600 each from the two Tokyos and Sydney.
 
 The log is far smaller, because a window is one line however many probes went into
 it. A line is about 210 bytes, and a class writes 66 a hour (60 short windows and
@@ -989,11 +991,12 @@ it. A line is about 210 bytes, and a class writes 66 a hour (60 short windows an
 
 | node | classes | per day | per 30 days |
 | --- | --- | --- | --- |
-| HK | 4 | 1.3 MB | 40 MB |
-| TY | 2 | 0.7 MB | 20 MB |
-| AU | 2 | 0.7 MB | 20 MB |
+| HK | 2 | 0.7 MB | 20 MB |
+| TY2 | 1 | 0.3 MB | 10 MB |
+| TY | 1 | 0.3 MB | 10 MB |
+| AU | 1 | 0.3 MB | 10 MB |
 | CH | 0 — answers only | — | — |
-| **all** | | **2.7 MB** | **80 MB** |
+| **all** | | **1.7 MB** | **50 MB** |
 
 `max_log_mb` bounds it regardless: the file rotates at that size and one previous
 file is kept, so the dataset never occupies more than twice it however long a node
@@ -1005,8 +1008,8 @@ runs.
 
 ```
 == hk probe
-   hk: probe hk>ty dup=1 w=1m rtt=44.2ms mdev=0.4ms loss=0.0% n=60
-   hk: probe hk>ty dup=2 w=1m rtt=44.0ms mdev=0.3ms loss=0.0% n=60
+   hk: probe hk>ty2 dup=1 w=1m rtt=44.0ms mdev=0.2ms loss=0.0% n=60
+   hk: probe hk>ch dup=1 w=1m rtt=165.4ms mdev=0.5ms loss=0.0% n=60
 ```
 
 `deploy` opens one UDP port per node anything is probed toward and verifies it the
