@@ -11,3 +11,4 @@ whitelist.txt.refreshed
 .env
 .env.*
 dirty-ips.json
+*.bak
