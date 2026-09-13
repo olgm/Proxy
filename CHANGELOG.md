@@ -1,5 +1,39 @@
 # Changelog
 
+## v2.3.1 — 2026-09-13
+
+A second Tokyo node. ty-b Tokyo joins as `ty2`, taking the Hong Kong chain's
+relay leg from the incumbent and standing up an ingress of its own beside it. No
+code changed in this release: it is a `topology.json` change and a `trial.json`
+one, and the version is here so `proxyctl status` can tell a node deployed before
+ty2 from one deployed after.
+
+- **The Hong Kong chain is now HK → ty2 → CH.** The incumbent Tokyo node keeps its
+  own ingress and its own route to Chicago until its billing cycle ends, so both
+  Tokyos are live at once and `ty.example.com` does not move. Recorded
+  here because `topology.json` is not in the repo, and this is the only place the
+  change leaves a mark.
+- **ty2 is an ingress as well as a relay**, on 30001 like every other entry and
+  holding the same whitelist. A fourth UDP route pushes every allocated port
+  along: the control link moves up one on all five nodes and probed's health port
+  two.
+- **The measurement follows the routes, so the classes moved with them.** `hk>ty`
+  is gone, `hk>ty2` and `ty2>ch` are new, and `hk>ch` keeps its name while
+  changing which Tokyo it goes through. Worth knowing before reading
+  `probe.jsonl` across today.
+- **What it costs is a worse overnight tail on the Hong Kong chain.** ty2's leg to
+  Chicago leaves GSL for NTT in roughly a third of the minutes between 19:00 and
+  05:00 UTC, +5 to +18 ms, where the incumbent's leg to the same box never moves.
+  The median chain pays +0.11 ms and the window sits outside Hong Kong's evening.
+  It is that prefix's treatment at the Chicago end, not the node.
+- **The trial mesh is down to one leg.** The bake-off has answered what it was
+  built for, so `trial.json` keeps only ty-b↔Chicago-ty-a — the pair that
+  says whether a non-ty-c Chicago removes the reroute above. triald leaves hk,
+  ty and ch.
+- **The probe figures in the README were written for two copies.** The fleet has
+  carried one since 2026-09-09, so the bandwidth, log-size and class counts were
+  all high. Rewritten at one copy, over five nodes.
+
 ## v2.3.0 — 2026-09-10
 
 The status feed stops being a wall of text. `#status` now reads as a log of
