@@ -6,11 +6,12 @@ packet is replaced by the node before it rather than by the far end.
 Legs run over plain TCP or over a UDP tunnel, per route. The tunnel can send every
 packet more than once, and down more than one path at a time.
 
-Targets Hypixel. Deployed today on five nodes — Hong Kong, two in Tokyo, Sydney
-and Chicago — every one of them an ingress, all five converging on the Chicago
-exit. HK goes through the second Tokyo node; both Tokyos and Sydney go straight to
-Chicago; Chicago dials the backend itself. Every hop leg is UDP, carrying one
-copy of each packet.
+Targets Hypixel. Deployed today on six nodes — Hong Kong, two in Tokyo, Sydney and
+two in Chicago. Five are ingresses and one is a pure relay; every path converges on
+the single Chicago node that dials the backend. HK goes through the second Tokyo
+node, which races two ways into that exit: straight there, and through the second
+Chicago box. Sydney and the incumbent Tokyo go straight to Chicago. Every hop leg
+is UDP, carrying one copy of each packet down each path it races.
 
 ## Design
 
@@ -909,8 +910,8 @@ Two things fall out of that and are not oversights:
   the production class would be the same measurement under two names. Since the
   fleet went to `duplicate: 1` that is every class it has.
 - **A route of exactly one leg gets no end-to-end class.** It would be its leg
-  class again. Today only Hong Kong has a chain; both Tokyos and Sydney are one
-  leg each.
+  class again. Today Sydney and the incumbent Tokyo are one leg each; Hong Kong
+  and the second Tokyo each race two paths into the exit, so both have one.
 
 `proxyctl config` prints the whole map:
 
@@ -968,22 +969,27 @@ the rate up when that is the question being asked.
 ### What it costs
 
 A request is 66 bytes on the wire and an answer 82, IP and UDP headers included.
-At the default 1 Hz on the deployed five-node topology, every class at one copy:
+At the default 1 Hz on the deployed six-node topology, every class at one copy. A
+leg carries one pair of datagrams a second for each class that crosses it, and a
+raced chain crosses every path it races:
 
 | leg | datagrams/s | per day | per 30 days |
 | --- | --- | --- | --- |
 | HK→TY2 | 4 | 26 MB | 0.8 GB |
-| TY2→CH | 4 | 26 MB | 0.8 GB |
+| TY2→CH | 6 | 38 MB | 1.2 GB |
+| TY2→CH2 | 6 | 38 MB | 1.2 GB |
+| CH2→CH | 6 | 38 MB | 1.2 GB |
 | TY→CH | 2 | 13 MB | 0.4 GB |
 | AU→CH | 2 | 13 MB | 0.4 GB |
-| **all** | **12** | **77 MB** | **2.3 GB** |
+| **all** | **26** | **166 MB** | **5.0 GB** |
 
 That is what crosses the wire; each end bills what it sends and what it receives,
-so budget roughly double across the five nodes. For scale, one Minecraft session is
+so budget roughly double across the six nodes. For scale, one Minecraft session is
 tens of KB/s, so the whole measurement is a few percent of a single player.
 
-**18,000 probes an hour** fleet-wide: 7,200 from Hong Kong, which originates two
-classes, and 3,600 each from the two Tokyos and Sydney.
+**28,800 probes an hour** fleet-wide: 10,800 from the second Tokyo, which
+originates three classes, 7,200 from Hong Kong, and 3,600 each from Sydney, the
+incumbent Tokyo and the Chicago relay.
 
 The log is far smaller, because a window is one line however many probes went into
 it. A line is about 210 bytes, and a class writes 66 a hour (60 short windows and
@@ -991,12 +997,13 @@ it. A line is about 210 bytes, and a class writes 66 a hour (60 short windows an
 
 | node | classes | per day | per 30 days |
 | --- | --- | --- | --- |
+| TY2 | 3 | 1.0 MB | 30 MB |
 | HK | 2 | 0.7 MB | 20 MB |
-| TY2 | 1 | 0.3 MB | 10 MB |
 | TY | 1 | 0.3 MB | 10 MB |
 | AU | 1 | 0.3 MB | 10 MB |
+| CH2 | 1 | 0.3 MB | 10 MB |
 | CH | 0 — answers only | — | — |
-| **all** | | **1.7 MB** | **50 MB** |
+| **all** | | **2.7 MB** | **80 MB** |
 
 `max_log_mb` bounds it regardless: the file rotates at that size and one previous
 file is kept, so the dataset never occupies more than twice it however long a node
