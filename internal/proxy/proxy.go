@@ -796,7 +796,7 @@ func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake) {
 	s.feed.login(sess)
 	s.countMu.Unlock()
 
-	up, down := relay(c, u)
+	up, down, _, _ := relay(c, u)
 
 	s.live.remove(id)
 
@@ -849,7 +849,23 @@ func (s *server) serveStream(st *tunnel.Stream) {
 		return
 	}
 	defer u.Close()
-	relay(st, u)
+	start := time.Now()
+	up, down, chainErr, backendErr := relay(st, u)
+	// The only place the far end's own account of an ending is kept. The entry sees
+	// a reset and cannot tell a backend that hung up from a path that broke; this
+	// line is what tells them apart, and the stream id is what joins the two.
+	log.Printf("%s: stream %016x: closed after %s up=%s down=%s chain=%q backend=%q",
+		s.Bind, st.ID(), time.Since(start).Round(time.Second),
+		size(up), size(down), ended(chainErr), ended(backendErr))
+}
+
+// ended names how one direction of a relay stopped, for a log line. A clean end
+// of stream is no error at all, and reads as "eof" rather than as an empty field.
+func ended(err error) string {
+	if err == nil {
+		return "eof"
+	}
+	return err.Error()
 }
 
 // connect opens the next leg: a TCP dial on a plain chain, a tunnel stream when
@@ -911,17 +927,22 @@ func (s *server) allowed(a net.Addr) bool {
 // because the bytes have to be numbered before they can be sent.
 // The byte counts it returns are payload: what the session carried, before the
 // tunnel duplicated any of it.
-func relay(a, b halfCloser) (aToB, bToA int64) {
+//
+// aErr and bErr are how each direction stopped: nil where the source reached a
+// clean end of stream, and the read or write error where it did not. Discarding
+// them is what left the exit unable to say whether a backend hung up or the path
+// to it broke, so the exit logs them; see serveStream.
+func relay(a, b halfCloser) (aToB, bToA int64, aErr, bErr error) {
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go pipe(b, a, &aToB, &wg)
-	go pipe(a, b, &bToA, &wg)
+	go pipe(b, a, &aToB, &aErr, &wg)
+	go pipe(a, b, &bToA, &bErr, &wg)
 	wg.Wait()
-	return aToB, bToA
+	return aToB, bToA, aErr, bErr
 }
 
-func pipe(dst, src halfCloser, n *int64, wg *sync.WaitGroup) {
+func pipe(dst, src halfCloser, n *int64, err *error, wg *sync.WaitGroup) {
 	defer wg.Done()
-	*n, _ = io.Copy(dst, src)
+	*n, *err = io.Copy(dst, src)
 	dst.CloseWrite()
 }

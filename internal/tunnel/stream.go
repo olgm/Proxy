@@ -533,6 +533,11 @@ type Traffic struct{ Sent, Recv uint64 }
 // Total is what both halves cost together.
 func (t Traffic) Total() uint64 { return t.Sent + t.Recv }
 
+// ID is the number every node on the chain knows this stream by. Each one's log
+// line for a session carries it, which is what lets the entry's account of an
+// ending be read beside the exit's.
+func (s *Stream) ID() uint64 { return s.id }
+
 // Traffic reports what this stream has cost this node on the tunnel's legs,
 // duplicates and re-sends included. The ingress logs it beside the payload at
 // logout, where it is the measured leg the rest of the chain is reckoned from.
