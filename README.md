@@ -1151,6 +1151,20 @@ feed above for how it is arrived at.
 "What it does not do". A route with no whitelist does not read that packet at all
 and logs both empty.
 
+The exit writes a line of its own when a relayed stream ends, and it is the only
+record of how the far end ended it:
+
+```
+:9006: stream 3ba40e24ed20d8f5: closed after 38m28s up=1.6MB down=37.6MB chain="eof" backend="read tcp 198.51.100.30:41022->203.0.113.5:25565: read: connection reset by peer"
+```
+
+`chain` is how the direction back toward the player ended and `backend` how the one
+from Hypixel did: `eof` where that side reached a clean end of stream, and the error
+where it did not. The entry only ever sees `tunnel: reset by peer`, which says a
+stream ended early but not why — a backend that hung up and a path to it that broke
+read the same there. The stream id is the same number on both nodes, so the two
+accounts of one session join.
+
 Denials, rejected handshakes and whitelist renames each log a line of their own.
 `journalctl -u proxyd -f` on the node, or `proxyctl status` for the last of them.
 
