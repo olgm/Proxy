@@ -1,5 +1,23 @@
 # Changelog
 
+## v2.3.4 — 2026-09-14
+
+The exit writes down how a session ended. Until now the only account of a stream
+dying was the entry's `tunnel: reset by peer`, which says that a stream ended early
+and nothing about why, so a backend that hung up and a path to it that broke were
+the same line. The drop at 2026-09-14 08:06:27Z — every session on both v1 and v2
+gone inside one second, reconnects working twenty seconds later — had to be charged
+to the far end by inference rather than by evidence.
+
+- **`relay` keeps the error each direction ended with.** It discarded both, which is
+  where the answer was being thrown away: `io.Copy`'s error is the whole difference
+  between a clean FIN, an RST and a read timeout. The ingress asks for neither and
+  logs exactly what it did before.
+- **The exit logs one line per closed stream** — the bytes each way, how long it
+  lasted, and how both directions ended, `eof` for a clean end of stream and the
+  error otherwise. It joins to the entry's line by the stream id, which
+  `tunnel.Stream` now exposes.
+
 ## v2.3.3 — 2026-09-13
 
 The release v2.3.2 should have been. Nothing a node runs behaves differently; the
