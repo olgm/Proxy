@@ -48,9 +48,9 @@ mark.
   Treat it as part of a deploy now.
 - **The trial mesh is gone from the nodes.** v2.3.2 pointed it at the race, and
   seven nights are enough. `triald` is uninstalled from ty2, ch and ch2, its
-  eight udp/9400 firewall rules are deleted, the datasets are coming off the nodes
-  compressed into `trial-data/` and stay in `/var/lib/triald` either way, and
-  `trial.json` is retired to a `.bak`. The code stays until someone deletes
+  eight udp/9400 firewall rules are deleted, the datasets are pulled compressed
+  into `trial-data/` — 7.26 million records across the three nodes — and left in
+  `/var/lib/triald` as before, and `trial.json` is retired to a `.bak`. The code stays until someone deletes
   `cmd/triald` and `internal/trial`, as the README has said all along.
 
 ## v2.3.4 — 2026-09-14
