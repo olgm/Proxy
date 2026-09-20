@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+The night v1 hands over. No code changes; recorded here because neither
+`topology.json` nor `whitelist.txt` is in the repo, and this is the only place the
+change leaves a mark.
+
+- **The whitelist carries v1's players.** v1 (`minecraftspeedproxy` on CH:25565)
+  kept 589 bare names with no UUIDs and no owners. Resolved against Mojang from the
+  operator's machine, 356 still exist under that name and 78 more are accounts that
+  renamed since — Mojang's name endpoint answers 404 for an old spelling, which is
+  why a third of the list looked dead when it was not — and 104 have never existed
+  anywhere. After dropping accounts listed twice and the 29 already here under a
+  Discord owner, 383 lines went onto every entry through `proxyd ctl`, tagged `v1`:
+  no Discord owner, so only a manager may remove them. 410 players in all, level
+  on all five entries. Every player v1 saw in its last fourteen days is among them
+  but one, whose name no source knows.
+- **The account cap is lifted.** Both roles now allow 1,000,000 accounts, which is
+  a number rather than a code path on purpose: the bot's cap check stays, and
+  nobody will reach it. A role that should mean "unlimited" is a code change for
+  another day.
+
 ## v2.3.4 — 2026-09-14
 
 The exit writes down how a session ended. Until now the only account of a stream
