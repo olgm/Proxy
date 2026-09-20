@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-The night v1 stops taking players. No binary changed — the code here is v2.3.4,
+The night v1 is switched off. No binary changed — the code here is v2.3.4,
 deployed at last — but the fleet is no longer the one v2.3.4 described, and none of
 what changed lives in the repo: `topology.json`, `whitelist.txt`, `trial.json` and
 two nat tables. As with v2.3.1, this entry is the only place the change leaves a
@@ -17,9 +17,13 @@ mark.
   conntrack consults it for the first packet of a connection only: the sessions v1
   already held stay with v1 until they end, and a player who never changed their
   address is on v2 the next time they connect, without knowing it. A status ping to
-  either old address now answers `.w. v2`. The rules are as unpersisted as v1's DNAT
-  was; the end state is a 25565 route on CH and AU in the topology, after which they
-  go.
+  either old address answered `.w. v2` for the eighty minutes in between.
+- **v1 is gone, as of 04:03Z.** The hand-started process was stopped and its bot
+  with it, AU's DNAT and MASQUERADE rules and its 25565 firewall allows were
+  deleted, and both REDIRECTs came out. Nothing listens on 25565 anywhere now, on
+  purpose: the old names `ch1`, `sy1` and `ty1.example.net` are dead, and
+  the `example.com` names in the nodes channel are the only way in. Every node can be
+  rebooted again without expecting to restore anything by hand.
 - **The whitelist carries v1's players.** v1 kept 589 bare names: no UUIDs, no
   owners, 22 of them the same account twice. Resolved from the operator's machine —
   Mojang, never Hypixel — 356 still exist under that name, and a further 78 are

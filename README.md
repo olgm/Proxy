@@ -773,7 +773,8 @@ seconds before believing it hasn't.
 ## DNS
 
 `routes[].port` is whatever was free on that node, not whatever is memorable — every
-entry here is on 30001, because v1 still holds 25565 on two of them. A player should
+entry here is on 30001, because v1 held 25565 on two of them until 2026-09-20, and
+nothing listens there now. A player should
 not have to know that, and does not have to: a Java client given an address with no
 `:port` first looks up `_minecraft._tcp.<name>` and takes the host and port out of
 the SRV record it finds. So publish one, and the address a player types is a bare
