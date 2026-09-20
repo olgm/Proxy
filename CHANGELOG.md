@@ -20,6 +20,19 @@ change leaves a mark.
   a number rather than a code path on purpose: the bot's cap check stays, and
   nobody will reach it. A role that should mean "unlimited" is a code change for
   another day.
+- **v2.3.4 reached every node** between 02:30Z and 02:34Z on 2026-09-20, carrying
+  the two changes above. The deploy reproduced the probe answerer's stale state on
+  both nodes that answer legs, ch and ch2: every leg they answer read 100% loss
+  until `probed` was restarted on them, and nothing a player uses was affected.
+- **v1 stopped taking new connections at 02:44Z.** A nat `REDIRECT` on CH and AU
+  sends every new SYN to 25565 to proxyd on 30001, so a player who never changed
+  their address is now on v2 without knowing it; the sessions v1 already held stay
+  with v1 until they end, because conntrack only consults the rule for the first
+  packet. A status ping to either old address now answers `.w. v2`.
+- **The trial mesh is gone from the nodes.** `triald` uninstalled from ty2, ch and
+  ch2 after seven nights of the race being watched; the datasets were pulled
+  to `trial-data/` and left in `/var/lib/triald` on the nodes as before.
+  `trial.json` is retired to `trial.json.bak`.
 
 ## v2.3.4 — 2026-09-14
 
