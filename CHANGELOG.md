@@ -2,37 +2,56 @@
 
 ## Unreleased
 
-The night v1 hands over. No code changes; recorded here because neither
-`topology.json` nor `whitelist.txt` is in the repo, and this is the only place the
-change leaves a mark.
+The night v1 stops taking players. No binary changed — the code here is v2.3.4,
+deployed at last — but the fleet is no longer the one v2.3.4 described, and none of
+what changed lives in the repo: `topology.json`, `whitelist.txt`, `trial.json` and
+two nat tables. As with v2.3.1, this entry is the only place the change leaves a
+mark.
 
-- **The whitelist carries v1's players.** v1 (`minecraftspeedproxy` on CH:25565)
-  kept 589 bare names with no UUIDs and no owners. Resolved against Mojang from the
-  operator's machine, 356 still exist under that name and 78 more are accounts that
-  renamed since — Mojang's name endpoint answers 404 for an old spelling, which is
-  why a third of the list looked dead when it was not — and 104 have never existed
-  anywhere. After dropping accounts listed twice and the 29 already here under a
-  Discord owner, 383 lines went onto every entry through `proxyd ctl`, tagged `v1`:
-  no Discord owner, so only a manager may remove them. 410 players in all, level
-  on all five entries. Every player v1 saw in its last fourteen days is among them
-  but one, whose name no source knows.
-- **The account cap is lifted.** Both roles now allow 1,000,000 accounts, which is
-  a number rather than a code path on purpose: the bot's cap check stays, and
-  nobody will reach it. A role that should mean "unlimited" is a code change for
-  another day.
-- **v2.3.4 reached every node** between 02:30Z and 02:34Z on 2026-09-20, carrying
-  the two changes above. The deploy reproduced the probe answerer's stale state on
-  both nodes that answer legs, ch and ch2: every leg they answer read 100% loss
-  until `probed` was restarted on them, and nothing a player uses was affected.
-- **v1 stopped taking new connections at 02:44Z.** A nat `REDIRECT` on CH and AU
-  sends every new SYN to 25565 to proxyd on 30001, so a player who never changed
-  their address is now on v2 without knowing it; the sessions v1 already held stay
-  with v1 until they end, because conntrack only consults the rule for the first
-  packet. A status ping to either old address now answers `.w. v2`.
-- **The trial mesh is gone from the nodes.** `triald` uninstalled from ty2, ch and
-  ch2 after seven nights of the race being watched; the datasets were pulled
-  to `trial-data/` and left in `/var/lib/triald` on the nodes as before.
-  `trial.json` is retired to `trial.json.bak`.
+- **v1 stopped accepting new connections at 02:44Z on 2026-09-20.** v2.1.0 took its
+  number from the system the server list had called v2 since v1
+  (`minecraftspeedproxy`, holding 25565 on CH and, by DNAT, on AU), and v1 has held
+  those ports ever since — which is why every entry here listens on 30001 and a
+  player reaches it through an SRV record. From tonight a nat `REDIRECT` on both
+  nodes sends every new SYN to 25565 to proxyd on 30001. It matches `--syn`, so
+  conntrack consults it for the first packet of a connection only: the sessions v1
+  already held stay with v1 until they end, and a player who never changed their
+  address is on v2 the next time they connect, without knowing it. A status ping to
+  either old address now answers `.w. v2`. The rules are as unpersisted as v1's DNAT
+  was; the end state is a 25565 route on CH and AU in the topology, after which they
+  go.
+- **The whitelist carries v1's players.** v1 kept 589 bare names: no UUIDs, no
+  owners, 22 of them the same account twice. Resolved from the operator's machine —
+  Mojang, never Hypixel — 356 still exist under that name, and a further 78 are
+  accounts that renamed since, which Mojang's name endpoint answers with a 404 for
+  the old spelling. That is the hole the README's "Names that moved on" describes
+  from the other side: a list keyed on names goes stale silently, and a third of v1's
+  looked dead when it was not. Those 78 went in under their current name, each UUID
+  confirmed against the session server. 104 have never existed anywhere. After the
+  29 already listed under a Discord owner, 383 lines went onto every entry through
+  `proxyd ctl`, tagged `v1`: no owner, so only a manager may remove them, and a
+  member who adds one of those names is told it is the operator's. 410 players,
+  level on all five entries. Every player v1 saw in its last fourteen days is among
+  them but one, whose name no source knows; they can add themselves by UUID, which
+  resolves the other way round and works.
+- **The account cap is out of reach.** v2.3.0 raised the beta role from 3 accounts
+  to 5; both roles now allow 1,000,000. A number rather than a code path on purpose:
+  the bot's check stays exactly as it was, nobody will meet it, and a role that
+  means "unlimited" is a change for a night with more time in it.
+- **v2.3.4 reached every node** between 02:30Z and 02:34Z, six days after it was
+  cut. The exit's end-of-stream line it added is what the next drop like
+  2026-09-14's will be read from. The deploy cost one player on au their session,
+  drained the way v2.2.0 promised, and reproduced the probe answerer's stale state
+  from the 2026-09-08 incident on both nodes that answer legs, ch and ch2: every
+  leg they answered read 100% loss until `probed` was restarted on them, while
+  `au>ch` and `hk>ty2` were clean throughout. Nothing a player uses was affected.
+  Treat it as part of a deploy now.
+- **The trial mesh is gone from the nodes.** v2.3.2 pointed it at the race, and
+  seven nights are enough. `triald` is uninstalled from ty2, ch and ch2, its
+  eight udp/9400 firewall rules are deleted, the datasets are coming off the nodes
+  compressed into `trial-data/` and stay in `/var/lib/triald` either way, and
+  `trial.json` is retired to a `.bak`. The code stays until someone deletes
+  `cmd/triald` and `internal/trial`, as the README has said all along.
 
 ## v2.3.4 — 2026-09-14
 
