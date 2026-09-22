@@ -8,6 +8,12 @@ what changed lives in the repo: `topology.json`, `whitelist.txt`, `trial.json` a
 two nat tables. As with v2.3.1, this entry is the only place the change leaves a
 mark.
 
+- **Node names in this file are codenames.** Production nodes are named by region
+  (`hk`, `ty`, `ty2`, `ch`, `ch2`, `au`); the Tokyo bake-off candidates are `ty-a`
+  through `ty-d`. Provider names, hostnames, tailnet addresses and public IPs were
+  removed from every tracked file and from the repository's history before it was
+  opened, so `trial.example.json` and the log excerpts in the README use
+  documentation addresses.
 - **v1 stopped accepting new connections at 02:44Z on 2026-09-20.** v2.1.0 took its
   number from the system the server list had called v2 since v1
   (`minecraftspeedproxy`, holding 25565 on CH and, by DNAT, on AU), and v1 has held
@@ -21,9 +27,9 @@ mark.
 - **v1 is gone, as of 04:03Z.** The hand-started process was stopped and its bot
   with it, AU's DNAT and MASQUERADE rules and its 25565 firewall allows were
   deleted, and both REDIRECTs came out. Nothing listens on 25565 anywhere now, on
-  purpose: the old names `ch1`, `sy1` and `ty1.example.net` are dead, and
-  the `example.com` names in the nodes channel are the only way in. Every node can be
-  rebooted again without expecting to restore anything by hand.
+  purpose: the old v1 names (`ch1`, `sy1` and the `ty1` name under the old domain)
+  are dead, and the current names in the nodes channel are the only way in. Every
+  node can be rebooted again without expecting to restore anything by hand.
 - **The whitelist carries v1's players.** v1 kept 589 bare names: no UUIDs, no
   owners, 22 of them the same account twice. Resolved from the operator's machine —
   Mojang, never Hypixel — 356 still exist under that name, and a further 78 are
@@ -57,8 +63,8 @@ mark.
   `/var/lib/triald` as before, and `trial.json` is retired to a `.bak`. The code stays until someone deletes
   `cmd/triald` and `internal/trial`, as the README has said all along.
 - **Two days later it is back, on a new triangle: au, ch and ch2.** The
-  question now is whether AU should reach Chicago through the ty-a box instead of
-  ty-c, and a 300-ping spot check from AU could not tell them apart (176.16 ms
+  question now is whether AU should reach Chicago through `ch2` instead of `ch`,
+  and a 300-ping spot check from AU could not tell them apart (176.16 ms
   to ch2, 176.49 to ch, in the same 2.5 minutes). So from 05:52Z on
   2026-09-22 the mesh is two legs, `au-ch` and `au-ch2`. It has no runs, so
   every node sends its own echo and all four directions are measured from the end
@@ -120,7 +126,7 @@ nightly reroute on the direct leg stops being something a player can feel.
   1.53/1.77/5.19 ms, 0% loss over 30 probes — the one leg in this design nothing
   had ever measured.
 - **A stalling relay is now harmless, which is why this box is usable at all.** The
-  ty-a host is Hyper-V and stalls for whole seconds a few times a day; that ruled
+  `ch2` host is Hyper-V and stalls for whole seconds a few times a day; that ruled
   it out as an exit and does not rule it out as one of two raced paths, because the
   direct path carries the stream while it is away.
 - **`proxyctl status` stopped hiding a class.** Its lines were keyed on name, count
@@ -134,15 +140,15 @@ nightly reroute on the direct leg stops being something a player can feel.
 
 ## v2.3.1 — 2026-09-13
 
-A second Tokyo node. ty-b Tokyo joins as `ty2`, taking the Hong Kong chain's
-relay leg from the incumbent and standing up an ingress of its own beside it. No
-code changed in this release: it is a `topology.json` change and a `trial.json`
+A second Tokyo node. The `ty-b` candidate from the bake-off joins as `ty2`, taking
+the Hong Kong chain's relay leg from the incumbent and standing up an ingress of
+its own beside it. No code changed in this release: it is a `topology.json` change and a `trial.json`
 one, and the version is here so `proxyctl status` can tell a node deployed before
 ty2 from one deployed after.
 
 - **The Hong Kong chain is now HK → ty2 → CH.** The incumbent Tokyo node keeps its
   own ingress and its own route to Chicago until its billing cycle ends, so both
-  Tokyos are live at once and `ty.example.com` does not move. Recorded
+  Tokyos are live at once and the `ty` DNS name does not move. Recorded
   here because `topology.json` is not in the repo, and this is the only place the
   change leaves a mark.
 - **ty2 is an ingress as well as a relay**, on 30001 like every other entry and
@@ -159,9 +165,9 @@ ty2 from one deployed after.
   The median chain pays +0.11 ms and the window sits outside Hong Kong's evening.
   It is that prefix's treatment at the Chicago end, not the node.
 - **The trial mesh is down to one leg.** The bake-off has answered what it was
-  built for, so `trial.json` keeps only ty-b↔Chicago-ty-a — the pair that
-  says whether a non-ty-c Chicago removes the reroute above. triald leaves hk,
-  ty and ch.
+  built for, so `trial.json` keeps only ty-b↔ch2 — the pair that says whether a
+  Chicago box on a second provider removes the reroute above. triald leaves hk, ty
+  and ch.
 - **The probe figures in the README were written for two copies.** The fleet has
   carried one since 2026-09-09, so the bandwidth, log-size and class counts were
   all high. Rewritten at one copy, over five nodes.
@@ -224,15 +230,15 @@ links the webhook client that grew attachment support.
   faults that have been announced and not yet recovered, so a redeploy does not
   re-announce every open one.
 
-- `trial.example.json`: the ty-b node is `198.51.100.22`, and the two legs that
-  reach it now expect 44 ms and 121 ms rather than 70 and 128. ty-b replaced the
-  service's primary address on 2026-09-09. The old one sat in `198.51.100.0/22`, a
-  prefix AS932 egressed to Global Secure Layer at Singapore instead of the local
+- `trial.example.json`: the ty-b node has a new address, and the two legs that
+  reach it now expect 44 ms and 121 ms rather than 70 and 128. Its provider replaced
+  the service's primary address on 2026-09-09. The old one sat in a /22 that the
+  upstream egressed to Global Secure Layer at Singapore instead of the local
   Hong Kong handoff, and that NTT rather than GSL carried westward out of Chicago —
-  70.33 ms from hk where ty1 in `198.51.100.0/24` measured 43.70, and 130.60 from ch
-  against ty1's 121.29. Re-measured on the new address the same way: **43.81** and
-  **121.27**, a chain of 165.08 ms against ty1's 164.99. The node was never slow; its
-  prefix was, on both legs, for 35.9 ms in total.
+  70.33 ms from hk where ty1, in the /24 the new address now shares, measured 43.70,
+  and 130.60 from ch against ty1's 121.29. Re-measured on the new address the same
+  way: **43.81** and **121.27**, a chain of 165.08 ms against ty1's 164.99. The node
+  was never slow; its prefix was, on both legs, for 35.9 ms in total.
 
   The `expect_ms` values matter beyond bookkeeping. `trace.over_ms` is 5, so a leg
   more than 5 ms over its expectation traces itself; left at 70 the hk leg would have
@@ -826,15 +832,16 @@ whitelist. The chain accepted the login and the backend never answered.
   deploy path; build and copy it by hand.- `tools/tcpping`: TCP round-trip timing, with a `-listen` mode so any node can be a
   target. Measures what proxyd carries instead of what ICMP reports. Outside the
   deploy path.
-- Measured a candidate second Tokyo node (ty-a `nrt`, `vc2-1c-1gb`): 20 ICMP echoes
-  from each existing node, 0% loss, HK 44.6 ms avg and Chicago 136.1 ms avg. Node was
-  provisioned and destroyed on 2026-09-01; no topology refers to it and its IP is back
-  in ty-a's pool.
-- Measured all three ty-c Japan regions from the live `hk` and `ch` nodes, 20 ICMP
-  echoes each: chain totals 180.6 ms (Tokyo 3), 181.0 ms (Tokyo 2) and 188.7 ms
-  (Osaka) against 165.6 ms for the `ty` node in place, so no ty-c node is worth
-  adding to these routes and Osaka is slower on both legs rather than trading one
-  for the other. ty-c has no Taiwan or Hong Kong region.
+- Measured a candidate second Tokyo node (the smallest plan at the provider later
+  called `ty-a`): 20 ICMP echoes from each existing node, 0% loss, HK 44.6 ms avg
+  and Chicago 136.1 ms avg. Node was provisioned and destroyed on 2026-09-01; no
+  topology refers to it and its IP is back in the provider's pool.
+- Measured all three Japan regions of the provider later called `ty-c` from the
+  live `hk` and `ch` nodes, 20 ICMP echoes each: chain totals 180.6 ms (Tokyo 3),
+  181.0 ms (Tokyo 2) and 188.7 ms (Osaka) against 165.6 ms for the `ty` node in
+  place, so none of them is worth adding to these routes and Osaka is slower on
+  both legs rather than trading one for the other. That provider has no Taiwan or
+  Hong Kong region.
 - Pinned the Tailscale underlay to IPv4 on the HK↔Tokyo link, which had negotiated an
   IPv6 path costing 2.5 ms avg and 8.3 ms mdev against 0.5 ms on IPv4. Tokyo↔Chicago
   needed nothing: Chicago has no public IPv6. With both legs on IPv4 the chain is

@@ -13,12 +13,12 @@ func testMesh() *TrialMesh {
 	return &TrialMesh{
 		Port: 9400,
 		Nodes: map[string]TrialNode{
-			"hk":        {SSH: "root@hk", Addr: "10.0.0.1", ID: 1},
-			"ty-a":     {SSH: "root@v", Addr: "10.0.0.2", ID: 2},
+			"hk":   {SSH: "root@hk", Addr: "10.0.0.1", ID: 1},
+			"ty-a": {SSH: "root@v", Addr: "10.0.0.2", ID: 2},
 			"ty-b": {SSH: "root@h", Addr: "10.0.0.3", ID: 3},
-			"ty-c":    {SSH: "root@l", Addr: "10.0.0.4", ID: 4},
-			"ch":        {SSH: "root@c", Addr: "10.0.0.5", ID: 5},
-			"ty-d":    {SSH: "root@m", Addr: "10.0.0.6", ID: 6},
+			"ty-c": {SSH: "root@l", Addr: "10.0.0.4", ID: 4},
+			"ch":   {SSH: "root@c", Addr: "10.0.0.5", ID: 5},
+			"ty-d": {SSH: "root@m", Addr: "10.0.0.6", ID: 6},
 		},
 		Legs: []TrialLeg{
 			{A: "hk", B: "ty-a", ExpectMS: 45},
@@ -84,10 +84,10 @@ func TestTheReverseRunIsTheForwardRunTurnedAround(t *testing.T) {
 	cfgs := expandMesh(t, testMesh())
 
 	want := map[string][]string{
-		"ch":        {"ty-b", "ty-c"},
-		"ty-c":    {"ty-b", "ty-a"},
+		"ch":   {"ty-b", "ty-c"},
+		"ty-c": {"ty-a", "ty-b"},
 		"ty-b": {"hk", "ty-a"},
-		"ty-a":     {"hk"},
+		"ty-a": {"hk"},
 	}
 	for node, fwd := range want {
 		r := runOf(cfgs[node], "ch")

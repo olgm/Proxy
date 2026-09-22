@@ -208,10 +208,10 @@ func newMesh(t *testing.T, hz float64, windows []string, timeoutMS int) *mesh {
 	// and is therefore the terminus, which is a fact about its config and not a
 	// flag anybody set.
 	forward := map[string][]string{
-		"hk":        {"ty-a", "ty-b"},
-		"ty-a":     {"ty-b", "ty-c"},
+		"hk":   {"ty-a", "ty-b"},
+		"ty-a": {"ty-b", "ty-c"},
 		"ty-b": {"ch", "ty-c"},
-		"ty-c":    {"ch"},
+		"ty-c": {"ch"},
 	}
 
 	m := &mesh{logs: map[string]string{}, node: map[string]*Node{}}
@@ -242,11 +242,11 @@ func newMesh(t *testing.T, hz float64, windows []string, timeoutMS int) *mesh {
 // The five paths hk reaches ch by, which is what the seven edges enumerate once
 // the loop guard has removed everything that would revisit a node.
 var wantPaths = []string{
-	"hk>ty-b>ch",
-	"hk>ty-b>ty-c>ch",
 	"hk>ty-a>ty-b>ch",
 	"hk>ty-a>ty-b>ty-c>ch",
 	"hk>ty-a>ty-c>ch",
+	"hk>ty-b>ch",
+	"hk>ty-b>ty-c>ch",
 }
 
 func arrivals(rs []rec) []rec {
