@@ -8,21 +8,19 @@ import (
 )
 
 // defaultMotd is what an ingress says about itself when no file is configured.
-// Carried over from the v1 proxy, favicon and sample included, so the listing a
-// player already has saved does not change under them.
+// It is deliberately neutral, with no favicon and no players sample, since any
+// branding belongs in an operator's own /etc/proxyd/motd.json.
 //
 // version.name is never rendered: the client only shows it when the protocol does
 // not match, and Render always echoes the client's own. The branding that is
 // always visible is the description.
 const defaultMotd = `{
-  "version": {"name": ".w. v2", "protocol": 47},
+  "version": {"name": "proxy", "protocol": 47},
   "players": {
     "max": 1,
-    "online": 1,
-    "sample": [{"name": ".w.", "id": "ee0c5510-68a3-44dd-970e-64ad5fcf1e78"}]
+    "online": 1
   },
-  "description": {"text": ".w. v2"},
-  "favicon": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAAXNSR0IArs4c6QAAAANzQklUCAgI2+FP4AAAAbpJREFUaIHt1aGr8lAYBvDDYTBEZEEUEYNM1hRMBrEZlhSTDIcsiAhiFEwGyzAMu1gMBptoWdBgFHXBMCaL4t8xbhBE9HqvH5xP+T6eX3zf95zzHMZhhAAAAAAAAAAAAMD/TxCETqdDKWW1IZuNEomELMuvxMpms7Ise57H5FzC6gKNRmM4HMbj8V8n0+n0crlkcugFmwssFgvP85LJ5G0xGo1WKhW/339bTKVS+/2eyaEsUUqn06lhGNeKJEm2bZ/P536/fztpWVY4HH57wBfkcjnLsjiOI4RwHGea5mQyUVX1dDoVi8XLjCAIx+PxozGfo5SappnP5wkh5XLZsqxQKEQIqdVqtm1LkkQIyWQy8/n8w0F/oCjKaDSilK5WK03TrnVd19frdTAY1DRtMBh8MOEvfD7fZrOp1+vb7Zbn+Wud5/nZbDYejw3DaLVad6tEUSyVSu9N+ly73XYc5+7hEkJEUbRt23XdQqFw12o2m47jMPy1vURV1Vgs9liPRCKHw0HX9ceWoiiu614ew53bz/UOPM/vdrtqtfptt9vt9nq9Zwv/Zq4/EQgEPh0BAAAAAAAAAADgX/YFcR18foaYG5YAAAAASUVORK5CYII="
+  "description": {"text": "Minecraft proxy"}
 }`
 
 // Motd is the server-list response an ingress answers with. It is loaded once and

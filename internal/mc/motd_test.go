@@ -36,20 +36,19 @@ func TestMotdEchoesClientProtocol(t *testing.T) {
 	}
 }
 
-// The built-in document carries the v1 branding forward, so a saved server entry
-// looks the same to a player after the migration.
-func TestDefaultMotdKeepsBranding(t *testing.T) {
+// The built-in document is neutral: no favicon, no players sample, generic
+// description, so a fresh operator's install carries no prior branding.
+func TestDefaultMotdIsNeutral(t *testing.T) {
 	m, _ := LoadMotd("")
 	got := render(t, m, 47, 1)
-	if d := got["description"].(map[string]any)["text"]; d != ".w. v2" {
+	if d := got["description"].(map[string]any)["text"]; d != "Minecraft proxy" {
 		t.Errorf("description %q", d)
 	}
-	if fav, _ := got["favicon"].(string); len(fav) < 100 {
-		t.Errorf("favicon missing or truncated (%d bytes)", len(fav))
+	if _, ok := got["favicon"]; ok {
+		t.Errorf("favicon present in default motd")
 	}
-	sample := got["players"].(map[string]any)["sample"].([]any)
-	if len(sample) != 1 || sample[0].(map[string]any)["name"] != ".w." {
-		t.Errorf("sample %v", sample)
+	if _, ok := got["players"].(map[string]any)["sample"]; ok {
+		t.Errorf("players sample present in default motd")
 	}
 }
 

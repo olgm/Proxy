@@ -1,10 +1,9 @@
 {
-  "version": {"name": ".w. v2", "protocol": 47},
+  "version": {"name": "My Proxy", "protocol": 47},
   "players": {
     "max": 1,
     "online": 1,
-    "sample": [{"name": ".w.", "id": "ee0c5510-68a3-44dd-970e-64ad5fcf1e78"}]
+    "sample": [{"name": "Player", "id": "00000000-0000-0000-0000-000000000000"}]
   },
-  "description": {"text": ".w. v2"},
-  "favicon": "data:image/png;base64,<64x64 PNG>"
+  "description": {"text": "My Minecraft proxy"}
 }
