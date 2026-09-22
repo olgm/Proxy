@@ -8,6 +8,9 @@ what changed lives in the repo: `topology.json`, `whitelist.txt`, `trial.json` a
 two nat tables. As with v2.3.1, this entry is the only place the change leaves a
 mark.
 
+- **The README is a front page and the guides live in `docs/`.** The 1,191-line
+  README is now a short overview plus an index; deploy, transport, whitelist,
+  Discord bot, probe and trial detail each moved to their own file under `docs/`.
 - **`rewrite_host` is optional.** An ingress with no `rewrite_host` forwards the
   handshake with the hostname the client typed, and `rewrite_port` at zero leaves the
   port alone. The rewrite exists for backends that check the claimed hostname against

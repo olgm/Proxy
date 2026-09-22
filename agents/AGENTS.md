@@ -19,6 +19,8 @@ Notes for agents working on this repo.
   routes decide is measured, and how loss is split by direction.
 - [trial.md](trial.md) — the bake-off harness: why a candidate leg cannot be probed
   by probed, why every hop echoes, and what no clock here can measure. Temporary.
+- Operator-facing guides (deploy, transport tuning, whitelist, Discord bot, probe,
+  trial) live under [../docs/](../docs/), not here.
 
 ## Shape
 
