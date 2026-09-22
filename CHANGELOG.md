@@ -8,6 +8,20 @@ what changed lives in the repo: `topology.json`, `whitelist.txt`, `trial.json` a
 two nat tables. As with v2.3.1, this entry is the only place the change leaves a
 mark.
 
+- **`rewrite_host` is optional.** An ingress with no `rewrite_host` forwards the
+  handshake with the hostname the client typed, and `rewrite_port` at zero leaves the
+  port alone. The rewrite exists for backends that check the claimed hostname against
+  their own; a server that does not check needs neither field. The example topology
+  now points at `mc.example.com`, and the test fixtures no longer name one server.
+- **The built-in server-list document is neutral.** The default MOTD reads
+  "Minecraft proxy" with no favicon and no sample player; the operator's own listing
+  goes in `motd.json` as before. `motd.example.json` is a template rather than a copy
+  of one operator's listing.
+- **Repository scaffolding for an open repo.** `agents/` is tracked; it holds the
+  design notes the code and this file cite. `.env.example` and `bot.example.json`
+  show the shape of the two files that hold credentials, `CONTRIBUTING.md` and
+  `SECURITY.md` say how to change and how to report, and a GitHub Actions workflow
+  runs gofmt, vet, the tests and the stdlib-only check for `proxyd` and `probed`.
 - **Node names in this file are codenames.** Production nodes are named by region
   (`hk`, `ty`, `ty2`, `ch`, `ch2`, `au`); the Tokyo bake-off candidates are `ty-a`
   through `ty-d`. Provider names, hostnames, tailnet addresses and public IPs were
