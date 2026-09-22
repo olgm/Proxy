@@ -56,6 +56,20 @@ mark.
   into `trial-data/` — 7.26 million records across the three nodes — and left in
   `/var/lib/triald` as before, and `trial.json` is retired to a `.bak`. The code stays until someone deletes
   `cmd/triald` and `internal/trial`, as the README has said all along.
+- **Two days later it is back, on a new triangle: au, ch and ch2.** The
+  question now is whether AU should reach Chicago through the ty-a box instead of
+  ty-c, and a 300-ping spot check from AU could not tell them apart (176.16 ms
+  to ch2, 176.49 to ch, in the same 2.5 minutes). So from 05:52Z on
+  2026-09-22 the mesh is two legs, `au-ch` and `au-ch2`. It has no runs, so
+  every node sends its own echo and all four directions are measured from the end
+  that sends them. `au>ch` is a production leg and it is in the mesh on purpose:
+  it is the control, measured by the same process in the same second. au is id 8,
+  and ch and ch2 keep ids 5 and 7. Four udp/9400 ufw rules were added (two on
+  au, one on each Chicago node) and `tunnel-keys.json` gained two trial keys.
+  Nothing else changed: proxyd and probed kept their PIDs on all three nodes. The
+  first windows came in at 0% loss: `au>ch` p50 176.37, `au>ch2` 176.16,
+  `ch>au` 176.37, `ch2>au` 176.25. On ch and ch2 the new records are
+  appended to the old `trial.jsonl`, so filter by leg when pulling.
 
 ## v2.3.4 — 2026-09-14
 
