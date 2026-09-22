@@ -28,7 +28,7 @@ func startUDP(t *testing.T, l Listener) string {
 
 func key() string { return tunnel.EncodeKey(tunnel.NewKey()) }
 
-// The same HK -> TY -> CHI -> Hypixel shape as the TCP test, with both inter-node
+// The same HK -> TY -> CHI -> backend shape as the TCP test, with both inter-node
 // legs over UDP and every chunk sent twice. The ingress is unchanged: players
 // still arrive over TCP, and the handshake is still the only packet parsed.
 func TestUDPChainRewritesAndRelays(t *testing.T) {
@@ -45,7 +45,7 @@ func TestUDPChainRewritesAndRelays(t *testing.T) {
 	})
 	ingress := startNode(t, Listener{
 		Hops:      []Link{{Addr: relay, Key: k1, Duplicate: 2}},
-		Minecraft: &Minecraft{RewriteHost: "mc.hypixel.net", RewritePort: 25565},
+		Minecraft: &Minecraft{RewriteHost: "mc.example.com", RewritePort: 25565},
 	})
 
 	c, err := net.Dial("tcp", ingress)
@@ -67,7 +67,7 @@ func TestUDPChainRewritesAndRelays(t *testing.T) {
 
 	select {
 	case s := <-got:
-		if s.h.Address != "mc.hypixel.net" || s.h.Port != 25565 {
+		if s.h.Address != "mc.example.com" || s.h.Port != 25565 {
 			t.Errorf("backend saw %s:%d", s.h.Address, s.h.Port)
 		}
 		if s.h.ProtocolVersion != 765 {
@@ -97,7 +97,7 @@ func TestUDPWithoutARelay(t *testing.T) {
 	exit := startUDP(t, Listener{Upstream: backend, Peers: []Link{{Addr: "127.0.0.1", Key: k}}})
 	ingress := startNode(t, Listener{
 		Hops:      []Link{{Addr: exit, Key: k}},
-		Minecraft: &Minecraft{RewriteHost: "mc.hypixel.net"},
+		Minecraft: &Minecraft{RewriteHost: "mc.example.com"},
 	})
 	c, err := net.Dial("tcp", ingress)
 	if err != nil {
@@ -108,7 +108,7 @@ func TestUDPWithoutARelay(t *testing.T) {
 	c.Write(append(hs, []byte{0x0a, 0x00, 0x08, 'n', 'o', 't', 'c', 'h'}...))
 	select {
 	case s := <-got:
-		if s.h.Address != "mc.hypixel.net" {
+		if s.h.Address != "mc.example.com" {
 			t.Errorf("backend saw address %q", s.h.Address)
 		}
 	case <-time.After(15 * time.Second):

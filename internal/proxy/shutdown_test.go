@@ -28,7 +28,7 @@ func TestShutdownWritesDownTheSessionsItEnds(t *testing.T) {
 			Bind:     "127.0.0.1:0",
 			Upstream: holdingBackend(t),
 			Minecraft: &Minecraft{
-				RewriteHost: "mc.hypixel.net", RewritePort: 25565,
+				RewriteHost: "mc.example.com", RewritePort: 25565,
 				Whitelist: whitelistFile(t, "Notch:"+notchUUID+"\n"),
 			},
 		}},

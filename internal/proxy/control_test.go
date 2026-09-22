@@ -17,7 +17,7 @@ func TestControlLinkManagesTheWhitelist(t *testing.T) {
 	key := tunnel.NewKey()
 	n, err := start(&Config{
 		Listeners: []Listener{{Bind: "127.0.0.1:0", Upstream: "127.0.0.1:9",
-			Minecraft: &Minecraft{RewriteHost: "mc.hypixel.net", Whitelist: p}}},
+			Minecraft: &Minecraft{RewriteHost: "mc.example.com", Whitelist: p}}},
 		Control: &Control{Bind: "127.0.0.1:0", Key: tunnel.EncodeKey(key)},
 	})
 	if err != nil {
@@ -60,7 +60,7 @@ func TestControlRejectsBadKey(t *testing.T) {
 	p := whitelistFile(t, "")
 	_, err := start(&Config{
 		Listeners: []Listener{{Bind: "127.0.0.1:0", Upstream: "127.0.0.1:9",
-			Minecraft: &Minecraft{RewriteHost: "mc.hypixel.net", Whitelist: p}}},
+			Minecraft: &Minecraft{RewriteHost: "mc.example.com", Whitelist: p}}},
 		Control: &Control{Bind: "127.0.0.1:0", Key: "not-a-key"},
 	})
 	if err == nil {

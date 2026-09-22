@@ -582,7 +582,7 @@ func TestChainEchoTimesTheWholeTunnel(t *testing.T) {
 
 	// The whole reason this is its own message: the exit dials the backend when a
 	// stream opens, so a chain measurement that opened one would be a connection to
-	// Hypixel every time. See agents/operational-safety.md.
+	// the backend every time. See agents/operational-safety.md.
 	exit.mu.Lock()
 	streams := len(exit.streams)
 	exit.mu.Unlock()

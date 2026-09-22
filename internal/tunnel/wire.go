@@ -37,7 +37,7 @@ const (
 	// msgPing stops at the next node; this one is passed along until it runs out
 	// of hops, and the far end turns it around. It carries no stream and opens
 	// none, which is the point: the exit dials the backend when a stream opens, so
-	// measuring the chain with real traffic would mean a connection to Hypixel per
+	// measuring the chain with real traffic would mean a connection to the backend per
 	// measurement. See agents/operational-safety.md.
 	msgEcho      msgType = 8
 	msgEchoReply msgType = 9

@@ -33,7 +33,7 @@ func readLogin(t *testing.T, b []byte, proto int32) (*LoginStart, []byte, *bufio
 }
 
 // The UUID's presence is a function of the protocol version, so each band has to
-// parse on its own terms. See agents/hypixel-protocol.md §2.
+// parse on its own terms. See agents/minecraft-protocol.md §2.
 func TestReadLoginStartByProtocol(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

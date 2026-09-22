@@ -14,7 +14,7 @@
 // never sees contention on proxyd's socket. It measures the link, not the queue.
 //
 // Nothing here ever reaches the backend. A chain probe stops at the exit exactly
-// as the tunnel's ECHO does, and for the same reason: one hop further is Hypixel.
+// as the tunnel's ECHO does, and for the same reason: one hop further is the backend.
 // See agents/operational-safety.md.
 package probe
 

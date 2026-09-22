@@ -18,7 +18,7 @@ const MaxLoginStartLen = 4096
 //
 // Both fields are the client's unverified word. The real check happens between the
 // client and the backend, inside encryption we cannot read; see
-// agents/hypixel-protocol.md §4.
+// agents/minecraft-protocol.md §4.
 type LoginStart struct {
 	Name string
 	UUID [16]byte
@@ -54,7 +54,7 @@ func (l *LoginStart) UUIDString() string {
 // we only read this packet to look at it, never to change it.
 //
 // The layout after the name depends on the protocol version — see
-// agents/hypixel-protocol.md §2 — so the handshake's version has to be passed in.
+// agents/minecraft-protocol.md §2 — so the handshake's version has to be passed in.
 //
 // A correct branch consumes the body exactly. Bytes left over mean the version and
 // the payload disagree, which a snapshot client does by construction: it reports

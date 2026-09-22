@@ -2,7 +2,7 @@
 //
 // That claim cannot be verified here. proxyd never terminates Minecraft's
 // encryption, so it can never ask Mojang whether a UUID is really that player's —
-// see agents/hypixel-protocol.md §4. Everything this package allows, it allows on
+// see agents/minecraft-protocol.md §4. Everything this package allows, it allows on
 // the client's word. It keeps uninvited players off the chain; it is not an
 // authentication boundary, and it is not a rate limit.
 package whitelist

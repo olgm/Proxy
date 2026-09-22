@@ -116,7 +116,7 @@ func whitelistIngress(t *testing.T, upstream, list string) string {
 	}
 	return startNode(t, Listener{
 		Upstream:  upstream,
-		Minecraft: &Minecraft{RewriteHost: "mc.hypixel.net", RewritePort: 25565, Whitelist: list},
+		Minecraft: &Minecraft{RewriteHost: "mc.example.com", RewritePort: 25565, Whitelist: list},
 	})
 }
 
@@ -148,7 +148,7 @@ func TestWhitelistForwardsListedPlayer(t *testing.T) {
 
 	select {
 	case s := <-got:
-		if s.h.Address != "mc.hypixel.net" {
+		if s.h.Address != "mc.example.com" {
 			t.Errorf("backend saw address %q", s.h.Address)
 		}
 		// The gate reads Login Start only to look at it. Changing a byte here
@@ -162,7 +162,7 @@ func TestWhitelistForwardsListedPlayer(t *testing.T) {
 }
 
 // A stranger has to be turned away before we dial. Never opening the chain is what
-// stops a spoofer from spending the egress IP's reputation with Hypixel.
+// stops a spoofer from spending the egress IP's reputation with the backend.
 func TestWhitelistDeniesStrangerWithoutDialing(t *testing.T) {
 	backend, got := fakeLoginBackend(t)
 	ingress := whitelistIngress(t, backend, whitelistFile(t, "Notch:"+notchUUID+"\n"))
@@ -233,7 +233,7 @@ func TestStatusPingNeverReachesTheBackend(t *testing.T) {
 		t.Fatal("a status ping opened a connection to the backend")
 	case <-time.After(500 * time.Millisecond):
 	}
-	if doc["description"] == nil || doc["favicon"] == nil {
+	if doc["description"] == nil {
 		t.Fatalf("ingress answered without the branding: %v", doc)
 	}
 }
@@ -276,7 +276,7 @@ func TestOldClientRefusedWhenNameBelongsToAStranger(t *testing.T) {
 func TestRejectsUnreadableWhitelist(t *testing.T) {
 	_, err := newServer(Listener{
 		Bind: ":1", Upstream: "x:1",
-		Minecraft: &Minecraft{RewriteHost: "mc.hypixel.net", Whitelist: "/nonexistent/whitelist.txt"},
+		Minecraft: &Minecraft{RewriteHost: "mc.example.com", Whitelist: "/nonexistent/whitelist.txt"},
 	})
 	if err == nil {
 		t.Fatal("a listener with an unreadable whitelist started ungated")

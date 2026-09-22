@@ -16,7 +16,7 @@ type saw struct {
 	tail []byte
 }
 
-// fakeBackend stands in for Hypixel: it parses one handshake, reads what the client
+// fakeBackend stands in for the backend: it parses one handshake, reads what the client
 // pipelined behind it, then writes back so the reverse direction is exercised too.
 func fakeBackend(t *testing.T) (string, <-chan saw) {
 	t.Helper()
@@ -69,7 +69,7 @@ func startNode(t *testing.T, l Listener) string {
 	return ln.Addr().String()
 }
 
-// The full HK -> TY -> CH -> Hypixel shape, in-process.
+// The full HK -> TY -> CH -> backend shape, in-process.
 func TestThreeHopChainRewritesAndRelays(t *testing.T) {
 	backend, got := fakeBackend(t)
 
@@ -77,7 +77,7 @@ func TestThreeHopChainRewritesAndRelays(t *testing.T) {
 	relay := startNode(t, Listener{Upstream: egress, AllowFrom: []string{"127.0.0.1"}})
 	ingress := startNode(t, Listener{
 		Upstream:  relay,
-		Minecraft: &Minecraft{RewriteHost: "mc.hypixel.net", RewritePort: 25565},
+		Minecraft: &Minecraft{RewriteHost: "mc.example.com", RewritePort: 25565},
 	})
 
 	c, err := net.Dial("tcp", ingress)
@@ -99,8 +99,8 @@ func TestThreeHopChainRewritesAndRelays(t *testing.T) {
 
 	select {
 	case s := <-got:
-		if s.h.Address != "mc.hypixel.net" {
-			t.Errorf("backend saw address %q, want mc.hypixel.net (rewrite or bungee-strip failed)", s.h.Address)
+		if s.h.Address != "mc.example.com" {
+			t.Errorf("backend saw address %q, want mc.example.com (rewrite or bungee-strip failed)", s.h.Address)
 		}
 		if s.h.Port != 25565 {
 			t.Errorf("backend saw port %d, want 25565", s.h.Port)
@@ -154,7 +154,7 @@ func TestAllowlistAcceptsCIDR(t *testing.T) {
 	egress := startNode(t, Listener{Upstream: backend, AllowFrom: []string{"127.0.0.0/8"}})
 	ingress := startNode(t, Listener{
 		Upstream:  egress,
-		Minecraft: &Minecraft{RewriteHost: "mc.hypixel.net"},
+		Minecraft: &Minecraft{RewriteHost: "mc.example.com"},
 	})
 	c, err := net.Dial("tcp", ingress)
 	if err != nil {
@@ -169,11 +169,39 @@ func TestAllowlistAcceptsCIDR(t *testing.T) {
 		if s.h.Port != 1 {
 			t.Errorf("port rewritten to %d despite rewrite_port being unset", s.h.Port)
 		}
-		if s.h.Address != "mc.hypixel.net\x00FML2\x00" {
+		if s.h.Address != "mc.example.com\x00FML2\x00" {
 			t.Errorf("forge marker lost: %q", s.h.Address)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("CIDR allowlist blocked a permitted source")
+	}
+}
+
+// An ingress with no rewrite_host forwards the client's own hostname untouched:
+// some backends need the client's real hostname, not the proxy's.
+func TestNoRewriteHostPassesClientAddressThrough(t *testing.T) {
+	backend, got := fakeBackend(t)
+	ingress := startNode(t, Listener{
+		Upstream:  backend,
+		Minecraft: &Minecraft{},
+	})
+	c, err := net.Dial("tcp", ingress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	hs := (&mc.Handshake{ProtocolVersion: 765, Address: "play.example.com", Port: 1234, Intent: mc.IntentLogin}).Encode()
+	c.Write(append(hs, []byte{0x0a, 0x00, 0x08, 'n', 'o', 't', 'c', 'h'}...))
+	select {
+	case s := <-got:
+		if s.h.Address != "play.example.com" {
+			t.Errorf("address rewritten to %q despite rewrite_host being unset", s.h.Address)
+		}
+		if s.h.Port != 1234 {
+			t.Errorf("port rewritten to %d despite rewrite_port being unset", s.h.Port)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("backend never received the handshake")
 	}
 }
 

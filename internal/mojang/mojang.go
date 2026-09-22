@@ -4,7 +4,7 @@
 // Nothing on our wire carries that binding: a client before 1.19 sends a bare name,
 // and names are recycled once released, so a name recorded months ago may belong to
 // someone else today. Asking here is what makes a name-matched login meaningful.
-// These calls go to Mojang, never to Hypixel, so the probe rule in
+// These calls go to Mojang, never to the backend, so the probe rule in
 // agents/operational-safety.md does not apply to them.
 package mojang
 

@@ -42,7 +42,7 @@ func statusIngress(t *testing.T, upstream string) string {
 	t.Helper()
 	return startNode(t, Listener{
 		Upstream:  upstream,
-		Minecraft: &Minecraft{RewriteHost: "mc.hypixel.net", RewritePort: 25565},
+		Minecraft: &Minecraft{RewriteHost: "mc.example.com", RewritePort: 25565},
 	})
 }
 
@@ -172,7 +172,7 @@ func TestPongIsHeldForTheChainLatency(t *testing.T) {
 	ingress := startNode(t, Listener{
 		Hops:      []Link{{Addr: delayWire(t, exit, leg), Key: k}},
 		Tunnel:    &Tunnel{PingMS: 50},
-		Minecraft: &Minecraft{RewriteHost: "mc.hypixel.net", RewritePort: 25565},
+		Minecraft: &Minecraft{RewriteHost: "mc.example.com", RewritePort: 25565},
 	})
 
 	c := dialIngress(t, ingress, 765, mc.IntentStatus, []byte{0x01, 0x00})

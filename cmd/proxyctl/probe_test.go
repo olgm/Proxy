@@ -61,7 +61,7 @@ func eq(t *testing.T, got, want []string, what string) {
 // classes differ only in that count. Without both there is nothing to subtract.
 func TestProbeMeasuresEachLegAtBothCounts(t *testing.T) {
 	top := topo(Route{Name: "r", Entry: "hk", Port: 25565, Transport: "udp",
-		Duplicate: 2, Via: []string{"ty"}, Target: hypixel()})
+		Duplicate: 2, Via: []string{"ty"}, Target: backend()})
 	cfgs := probeOK(t, top)
 
 	eq(t, classes(t, cfgs, "hk"), []string{"hk>ty/leg x1 origin", "hk>ty/leg x2 origin"}, "hk")
@@ -75,7 +75,7 @@ func TestProbeMeasuresEachLegAtBothCounts(t *testing.T) {
 // production class would be the same measurement under two names.
 func TestProbeDoesNotMeasureAnUnduplicatedLegTwice(t *testing.T) {
 	top := topo(Route{Name: "r", Entry: "hk", Port: 25565, Transport: "udp",
-		Duplicate: 1, Via: []string{"ty"}, Target: hypixel()})
+		Duplicate: 1, Via: []string{"ty"}, Target: backend()})
 	cfgs := probeOK(t, top)
 	eq(t, classes(t, cfgs, "hk"), []string{"hk>ty/leg x1 origin"}, "hk")
 }
@@ -85,9 +85,9 @@ func TestProbeDoesNotMeasureAnUnduplicatedLegTwice(t *testing.T) {
 func TestProbeOnlyTouchesProductionPaths(t *testing.T) {
 	top := topo(
 		Route{Name: "hk", Entry: "hk", Port: 25565, Transport: "udp", Duplicate: 2,
-			Via: []string{"ty", "chi"}, Target: hypixel()},
+			Via: []string{"ty", "chi"}, Target: backend()},
 		Route{Name: "sg", Entry: "sg", Port: 25565, Transport: "udp", Duplicate: 2,
-			Via: []string{"chi"}, Target: hypixel()})
+			Via: []string{"chi"}, Target: backend()})
 	cfgs := probeOK(t, top)
 
 	seen := map[string]bool{}
@@ -118,9 +118,9 @@ func TestProbeOnlyTouchesProductionPaths(t *testing.T) {
 func TestProbeChainsOnlyMultiLegRoutes(t *testing.T) {
 	top := topo(
 		Route{Name: "hk", Entry: "hk", Port: 25565, Transport: "udp", Duplicate: 2,
-			Via: []string{"ty", "chi"}, Target: hypixel()},
+			Via: []string{"ty", "chi"}, Target: backend()},
 		Route{Name: "sg", Entry: "sg", Port: 25565, Transport: "udp", Duplicate: 2,
-			Via: []string{"chi"}, Target: hypixel()})
+			Via: []string{"chi"}, Target: backend()})
 	cfgs := probeOK(t, top)
 
 	eq(t, classes(t, cfgs, "hk"), []string{
@@ -142,7 +142,7 @@ func TestProbeChainsOnlyMultiLegRoutes(t *testing.T) {
 // measurement, written to the dataset under the same name and the same number.
 func TestProbeDoesNotMeasureAnUnduplicatedChainTwice(t *testing.T) {
 	top := topo(Route{Name: "r", Entry: "hk", Port: 25565, Transport: "udp",
-		Duplicate: 1, Via: []string{"ty", "chi"}, Target: hypixel()})
+		Duplicate: 1, Via: []string{"ty", "chi"}, Target: backend()})
 	cfgs := probeOK(t, top)
 
 	eq(t, classes(t, cfgs, "hk"), []string{"hk>chi/chain x1 origin", "hk>ty/leg x1 origin"}, "hk")
@@ -157,7 +157,7 @@ func TestProbeDoesNotMeasureAnUnduplicatedChainTwice(t *testing.T) {
 func TestProbeChainCarriesPerLegCounts(t *testing.T) {
 	top := topo(Route{Name: "r", Entry: "hk", Port: 25565, Transport: "udp", Duplicate: 3,
 		Via: []string{"ty", "chi"}, Legs: []Leg{{From: "ty", To: "chi", Duplicate: 1}},
-		Target: hypixel()})
+		Target: backend()})
 	cfgs := probeOK(t, top)
 
 	var got []int
@@ -180,7 +180,7 @@ func TestProbeChainCarriesPerLegCounts(t *testing.T) {
 // be probed: the point of the class is that the first answer back wins.
 func TestProbeRacesEveryPath(t *testing.T) {
 	top := topo(Route{Name: "r", Entry: "hk", Port: 25565, Transport: "udp", Duplicate: 2,
-		Exit: "chi", Paths: []Path{{Via: []string{"ty"}}, {Via: nil}}, Target: hypixel()})
+		Exit: "chi", Paths: []Path{{Via: []string{"ty"}}, {Via: nil}}, Target: backend()})
 	cfgs := probeOK(t, top)
 
 	for _, k := range cfgs["hk"].Classes {
@@ -202,7 +202,7 @@ func TestProbeRacesEveryPath(t *testing.T) {
 // ingress dials out and answers come back on the same socket.
 func TestProbePortsAndChecks(t *testing.T) {
 	top := topo(Route{Name: "r", Entry: "hk", Port: 25565, Transport: "udp", Duplicate: 2,
-		Via: []string{"ty"}, Target: hypixel()})
+		Via: []string{"ty"}, Target: backend()})
 	top.Probe = &Probe{Hz: 1}
 	expandOK(t, top)
 	cfgs, checks, _, err := expandProbe(top, top.nextPort)
@@ -231,7 +231,7 @@ func TestProbePortsAndChecks(t *testing.T) {
 // never moves a port proxyd is already using.
 func TestProbePortsFollowTheRest(t *testing.T) {
 	top := topo(Route{Name: "r", Entry: "hk", Port: 25565, Transport: "udp", Duplicate: 2,
-		Via: []string{"ty"}, Whitelist: "whitelist.txt", Target: hypixel()})
+		Via: []string{"ty"}, Whitelist: "whitelist.txt", Target: backend()})
 	top.Probe = &Probe{Hz: 1}
 	cfgs, _ := expandOK(t, top)
 	pcfgs, _, _, err := expandProbe(top, top.nextPort)
@@ -259,9 +259,9 @@ func TestProbePortsFollowTheRest(t *testing.T) {
 func TestProbeRejectsRoutesDisagreeingAboutALeg(t *testing.T) {
 	top := topo(
 		Route{Name: "a", Entry: "hk", Port: 25565, Transport: "udp", Duplicate: 2,
-			Via: []string{"ty", "chi"}, Target: hypixel()},
+			Via: []string{"ty", "chi"}, Target: backend()},
 		Route{Name: "b", Entry: "sg", Port: 25566, Transport: "udp", Duplicate: 3,
-			Via: []string{"ty", "chi"}, Target: hypixel()})
+			Via: []string{"ty", "chi"}, Target: backend()})
 	top.Probe = &Probe{Hz: 1}
 	expandOK(t, top)
 	if _, _, _, err := expandProbe(top, top.nextPort); err == nil {
@@ -274,7 +274,7 @@ func TestProbeRejectsRoutesDisagreeingAboutALeg(t *testing.T) {
 // A topology with no UDP leg has nothing to measure, and saying so beats deploying
 // a service that would sit there silent.
 func TestProbeRejectsATopologyWithNoUDPLeg(t *testing.T) {
-	top := topo(Route{Name: "r", Entry: "hk", Port: 25565, Via: []string{"ty"}, Target: hypixel()})
+	top := topo(Route{Name: "r", Entry: "hk", Port: 25565, Via: []string{"ty"}, Target: backend()})
 	top.Probe = &Probe{Hz: 1}
 	expandOK(t, top)
 	if _, _, _, err := expandProbe(top, top.nextPort); err == nil {
@@ -286,7 +286,7 @@ func TestProbeRejectsATopologyWithNoUDPLeg(t *testing.T) {
 // talking about different measurements with the same byte on the wire.
 func TestProbeClassIDsAgreeAcrossNodes(t *testing.T) {
 	top := topo(Route{Name: "r", Entry: "hk", Port: 25565, Transport: "udp", Duplicate: 2,
-		Via: []string{"ty", "chi"}, Target: hypixel()})
+		Via: []string{"ty", "chi"}, Target: backend()})
 	cfgs := probeOK(t, top)
 
 	byID := map[uint8]string{}
@@ -315,7 +315,7 @@ func TestProbeClassIDsAgreeAcrossNodes(t *testing.T) {
 // Both ends of a leg must hold the same key, or nothing opens.
 func TestProbeKeysMatchAcrossALeg(t *testing.T) {
 	top := topo(Route{Name: "r", Entry: "hk", Port: 25565, Transport: "udp", Duplicate: 2,
-		Via: []string{"ty"}, Target: hypixel()})
+		Via: []string{"ty"}, Target: backend()})
 	cfgs := probeOK(t, top)
 
 	if cfgs["hk"].Links[0].Key != cfgs["ty"].Links[0].Key {
@@ -338,9 +338,9 @@ func TestProbeKeysMatchAcrossALeg(t *testing.T) {
 func TestProbeConfigsAreValid(t *testing.T) {
 	top := topo(
 		Route{Name: "hk", Entry: "hk", Port: 25565, Transport: "udp", Duplicate: 2,
-			Via: []string{"ty", "chi"}, Target: hypixel()},
+			Via: []string{"ty", "chi"}, Target: backend()},
 		Route{Name: "sg", Entry: "sg", Port: 25566, Transport: "udp", Duplicate: 2,
-			Via: []string{"chi"}, Target: hypixel()})
+			Via: []string{"chi"}, Target: backend()})
 	cfgs := probeOK(t, top)
 	for _, n := range probeNodes(cfgs) {
 		c := *cfgs[n]

@@ -8,7 +8,7 @@
   },
   "routes": [
     {
-      "name": "hypixel",
+      "name": "backend",
       "entry": "hk",
       "port": 25565,
       "transport": "udp",
@@ -16,8 +16,8 @@
       "via": ["ty", "chi"],
       "whitelist": "whitelist.txt",
       "target": {
-        "addr": "mc.hypixel.net:25565",
-        "rewrite_host": "mc.hypixel.net",
+        "addr": "mc.example.com:25565",
+        "rewrite_host": "mc.example.com",
         "rewrite_port": 25565
       }
     }

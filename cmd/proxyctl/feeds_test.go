@@ -9,8 +9,8 @@ import (
 )
 
 func feedTopo(f *Feeds) *Topology {
-	top := topo(Route{Name: "hypixel", Entry: "hk", Port: 25565, Transport: "udp",
-		Via: []string{"ty", "chi"}, Whitelist: "whitelist.txt", Target: hypixel()})
+	top := topo(Route{Name: "backend", Entry: "hk", Port: 25565, Transport: "udp",
+		Via: []string{"ty", "chi"}, Whitelist: "whitelist.txt", Target: backend()})
 	top.Feeds = f
 	top.Probe = &Probe{Hz: 1, Windows: []string{"1m", "10m"}}
 	top.Discord = &Discord{Guild: "g", Roles: map[string]botcfg.Role{"r": {Accounts: 1}}}
@@ -144,8 +144,8 @@ func TestInstallScriptsCarryTheFeedInTheirBody(t *testing.T) {
 // a login and has nothing to say.
 func TestSessionFeedNodesAreTheIngresses(t *testing.T) {
 	top := topo(
-		Route{Name: "a", Entry: "hk", Port: 25565, Via: []string{"ty", "chi"}, Target: hypixel()},
-		Route{Name: "b", Entry: "sg", Port: 25566, Via: []string{"chi"}, Target: hypixel()},
+		Route{Name: "a", Entry: "hk", Port: 25565, Via: []string{"ty", "chi"}, Target: backend()},
+		Route{Name: "b", Entry: "sg", Port: 25566, Via: []string{"chi"}, Target: backend()},
 	)
 	cfgs, _ := expandOK(t, top)
 	got := strings.Join(sessionFeedNodes(cfgs), " ")
@@ -171,9 +171,9 @@ func TestProbeFeedSkipsTheNodeThatOnlyAnswers(t *testing.T) {
 // than off, so an entry added later still shows up in the roster.
 func TestOnlineOrderPutsNamedNodesFirst(t *testing.T) {
 	top := topo(
-		Route{Name: "a", Entry: "hk", Port: 25565, Whitelist: "whitelist.txt", Via: []string{"chi"}, Target: hypixel()},
-		Route{Name: "b", Entry: "ty", Port: 25566, Whitelist: "whitelist.txt", Via: []string{"chi"}, Target: hypixel()},
-		Route{Name: "c", Entry: "sg", Port: 25567, Whitelist: "whitelist.txt", Via: []string{"chi"}, Target: hypixel()},
+		Route{Name: "a", Entry: "hk", Port: 25565, Whitelist: "whitelist.txt", Via: []string{"chi"}, Target: backend()},
+		Route{Name: "b", Entry: "ty", Port: 25566, Whitelist: "whitelist.txt", Via: []string{"chi"}, Target: backend()},
+		Route{Name: "c", Entry: "sg", Port: 25567, Whitelist: "whitelist.txt", Via: []string{"chi"}, Target: backend()},
 	)
 	top.Feeds = &Feeds{Online: &OnlineFeed{Feed: Feed{WebhookEnv: "W"}, Nodes: []string{"sg", "hk"}}}
 	if got := strings.Join(top.onlineOrder(), " "); got != "sg hk ty" {

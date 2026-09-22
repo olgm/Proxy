@@ -30,7 +30,7 @@ const (
 	// handshakeTimeout bounds how long a client may take to send its handshake,
 	// and its Login Start when there is a whitelist to check it against. Cleared
 	// once we start relaying: the Play stream is long-lived and idles between
-	// Hypixel's ~15s keepalives.
+	// the server's keepalives, ~15s on large servers.
 	handshakeTimeout = 10 * time.Second
 	dialTimeout      = 10 * time.Second
 
@@ -439,6 +439,9 @@ func startControl(c *Control, s *server, live *live) (net.Listener, error) {
 func (l Listener) Role() string {
 	switch {
 	case l.Minecraft != nil:
+		if l.Minecraft.RewriteHost == "" {
+			return "minecraft"
+		}
 		return "minecraft->" + l.Minecraft.RewriteHost
 	case l.Net == "udp" && l.Upstream != "":
 		return "exit"
@@ -786,7 +789,7 @@ func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake) {
 	s.countMu.Lock()
 	sess.Online = s.online.Add(1)
 	// Both sides, so a shutdown unblocks the download direction too. The client
-	// going quiet is not enough to end a relay Hypixel is still writing to.
+	// going quiet is not enough to end a relay the backend is still writing to.
 	id := s.live.add(sess, func() { c.Close(); u.Close() })
 	// Deferred, so it runs after the logout below however this returns: a
 	// stopping node waits on this count, and it may only stop waiting once the

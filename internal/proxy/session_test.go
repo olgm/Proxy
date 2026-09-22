@@ -58,7 +58,7 @@ func feedIngress(t *testing.T, upstream, list, url string) (string, *server) {
 	l := Listener{
 		Bind:      "127.0.0.1:0",
 		Upstream:  upstream,
-		Minecraft: &Minecraft{RewriteHost: "mc.hypixel.net", RewritePort: 25565, Whitelist: list},
+		Minecraft: &Minecraft{RewriteHost: "mc.example.com", RewritePort: 25565, Whitelist: list},
 	}
 	s, err := newServer(l)
 	if err != nil {

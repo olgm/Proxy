@@ -46,22 +46,38 @@ func TestVarIntBoundary(t *testing.T) {
 
 func TestRewriteAddress(t *testing.T) {
 	for _, tc := range []struct{ name, in, want string }{
-		{"plain", "mc.example.com", "mc.hypixel.net"},
-		{"fml", "mc.example.com\x00FML\x00", "mc.hypixel.net\x00FML\x00"},
-		{"fml2", "mc.example.com\x00FML2\x00", "mc.hypixel.net\x00FML2\x00"},
-		{"fml3", "mc.example.com\x00FML3\x00", "mc.hypixel.net\x00FML3\x00"},
+		{"plain", "play.example.com", "mc.example.com"},
+		{"fml", "play.example.com\x00FML\x00", "mc.example.com\x00FML\x00"},
+		{"fml2", "play.example.com\x00FML2\x00", "mc.example.com\x00FML2\x00"},
+		{"fml3", "play.example.com\x00FML3\x00", "mc.example.com\x00FML3\x00"},
 		// BungeeCord forwarding: host\0clientIP\0uuid\0properties. Client-supplied
 		// identity must never reach the backend.
-		{"bungee", "mc.example.com\x001.2.3.4\x00abcd\x00[{\"name\":\"textures\"}]", "mc.hypixel.net"},
-		{"already-correct", "mc.hypixel.net", "mc.hypixel.net"},
+		{"bungee", "play.example.com\x001.2.3.4\x00abcd\x00[{\"name\":\"textures\"}]", "mc.example.com"},
+		{"already-correct", "mc.example.com", "mc.example.com"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := &Handshake{Address: tc.in}
-			h.RewriteAddress("mc.hypixel.net")
+			h.RewriteAddress("mc.example.com")
 			if h.Address != tc.want {
 				t.Fatalf("got %q want %q", h.Address, tc.want)
 			}
 		})
+	}
+}
+
+// An empty rewrite host is a no-op: the client's own address, extras included,
+// passes through untouched.
+func TestRewriteAddressEmptyHostIsNoop(t *testing.T) {
+	for _, tc := range []string{
+		"play.example.com",
+		"play.example.com\x00FML\x00",
+		"play.example.com\x001.2.3.4\x00abcd\x00[{\"name\":\"textures\"}]",
+	} {
+		h := &Handshake{Address: tc}
+		h.RewriteAddress("")
+		if h.Address != tc {
+			t.Fatalf("got %q want %q (unchanged)", h.Address, tc)
+		}
 	}
 }
 
@@ -122,8 +138,8 @@ func TestLongAddressWithinLimit(t *testing.T) {
 	if h.Address != addr {
 		t.Fatal("long address not preserved")
 	}
-	h.RewriteAddress("mc.hypixel.net")
-	if h.Address != "mc.hypixel.net" {
+	h.RewriteAddress("mc.example.com")
+	if h.Address != "mc.example.com" {
 		t.Fatalf("bungee payload not stripped: %q", h.Address)
 	}
 }

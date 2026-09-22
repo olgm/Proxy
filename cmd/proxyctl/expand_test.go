@@ -23,8 +23,8 @@ func topo(routes ...Route) *Topology {
 	}
 }
 
-func hypixel() Target {
-	return Target{Addr: "mc.hypixel.net:25565", RewriteHost: "mc.hypixel.net", RewritePort: 25565}
+func backend() Target {
+	return Target{Addr: "mc.example.com:25565", RewriteHost: "mc.example.com", RewritePort: 25565}
 }
 
 func expandOK(t *testing.T, top *Topology) (map[string]*proxy.Config, []check) {
@@ -55,15 +55,15 @@ func only1(t *testing.T, cfgs map[string]*proxy.Config, node string) proxy.Liste
 
 // The plain chain has to keep expanding exactly as it did before UDP existed.
 func TestExpandTCPUnchanged(t *testing.T) {
-	top := topo(Route{Name: "hypixel", Entry: "hk", Port: 25565,
-		Via: []string{"ty", "chi"}, Target: hypixel()})
+	top := topo(Route{Name: "backend", Entry: "hk", Port: 25565,
+		Via: []string{"ty", "chi"}, Target: backend()})
 	cfgs, _ := expandOK(t, top)
 
 	hk := only1(t, cfgs, "hk")
 	if hk.Bind != ":25565" || hk.Upstream != "198.51.100.20:9000" || hk.Net != "" {
 		t.Errorf("hk: %+v", hk)
 	}
-	if hk.Minecraft == nil || hk.Minecraft.RewriteHost != "mc.hypixel.net" {
+	if hk.Minecraft == nil || hk.Minecraft.RewriteHost != "mc.example.com" {
 		t.Errorf("hk lost its minecraft block: %+v", hk.Minecraft)
 	}
 	ty := only1(t, cfgs, "ty")
@@ -72,15 +72,15 @@ func TestExpandTCPUnchanged(t *testing.T) {
 		t.Errorf("ty: %+v", ty)
 	}
 	chi := only1(t, cfgs, "chi")
-	if chi.Bind != ":9001" || chi.Upstream != "mc.hypixel.net:25565" ||
+	if chi.Bind != ":9001" || chi.Upstream != "mc.example.com:25565" ||
 		chi.AllowFrom[0] != "198.51.100.20" {
 		t.Errorf("chi: %+v", chi)
 	}
 }
 
 func TestExpandUDPSinglePath(t *testing.T) {
-	top := topo(Route{Name: "hypixel", Entry: "hk", Port: 25565, Transport: "udp",
-		Via: []string{"ty", "chi"}, Target: hypixel()})
+	top := topo(Route{Name: "backend", Entry: "hk", Port: 25565, Transport: "udp",
+		Via: []string{"ty", "chi"}, Target: backend()})
 	cfgs, checks := expandOK(t, top)
 
 	hk := only1(t, cfgs, "hk")
@@ -108,7 +108,7 @@ func TestExpandUDPSinglePath(t *testing.T) {
 	}
 
 	chi := only1(t, cfgs, "chi")
-	if chi.Net != "udp" || chi.Bind != ":9001" || chi.Upstream != "mc.hypixel.net:25565" ||
+	if chi.Net != "udp" || chi.Bind != ":9001" || chi.Upstream != "mc.example.com:25565" ||
 		len(chi.Hops) != 0 || len(chi.Peers) != 1 {
 		t.Fatalf("chi: %+v", chi)
 	}
@@ -142,8 +142,8 @@ func TestExpandUDPSinglePath(t *testing.T) {
 }
 
 func TestExpandUDPRace(t *testing.T) {
-	top := topo(Route{Name: "hypixel", Entry: "hk", Port: 25565, Transport: "udp",
-		Exit: "chi", Target: hypixel(),
+	top := topo(Route{Name: "backend", Entry: "hk", Port: 25565, Transport: "udp",
+		Exit: "chi", Target: backend(),
 		Paths: []Path{
 			{Via: []string{"ty"}},
 			{Via: nil, Duplicate: 1},
@@ -181,7 +181,7 @@ func TestExpandUDPRace(t *testing.T) {
 // A leg shared by two paths carries one stream of packets, so it cannot be asked
 // for two different copy counts.
 func TestConflictingDuplicateRejected(t *testing.T) {
-	top := topo(Route{Name: "r", Entry: "hk", Port: 1, Transport: "udp", Exit: "chi", Target: hypixel(),
+	top := topo(Route{Name: "r", Entry: "hk", Port: 1, Transport: "udp", Exit: "chi", Target: backend(),
 		Paths: []Path{
 			{Via: []string{"ty"}, Duplicate: 2},
 			{Via: []string{"ty", "sg"}, Duplicate: 3},
@@ -198,7 +198,7 @@ func TestConflictingDuplicateRejected(t *testing.T) {
 // of it are told: the node sending into it and the node sending back across it.
 func TestLegOverridesPath(t *testing.T) {
 	top := topo(Route{Name: "r", Entry: "hk", Port: 25565, Transport: "udp",
-		Via: []string{"ty", "chi"}, Target: hypixel(),
+		Via: []string{"ty", "chi"}, Target: backend(),
 		Legs: []Leg{{From: "ty", To: "chi", Duplicate: 1}}})
 	cfgs, _ := expandOK(t, top)
 	hk, ty, chi := only1(t, cfgs, "hk"), only1(t, cfgs, "ty"), only1(t, cfgs, "chi")
@@ -213,7 +213,7 @@ func TestLegOverridesPath(t *testing.T) {
 // Naming a shared leg settles what its paths could not agree on, and leaves the
 // legs they do not share at each path's own count.
 func TestLegSettlesSharedLeg(t *testing.T) {
-	top := topo(Route{Name: "r", Entry: "hk", Port: 1, Transport: "udp", Exit: "chi", Target: hypixel(),
+	top := topo(Route{Name: "r", Entry: "hk", Port: 1, Transport: "udp", Exit: "chi", Target: backend(),
 		Paths: []Path{
 			{Via: []string{"ty"}, Duplicate: 2},
 			{Via: []string{"ty", "sg"}, Duplicate: 3},
@@ -237,7 +237,7 @@ func TestLegMustBeOnAPath(t *testing.T) {
 		{{From: "ty", To: "chi", Duplicate: 1}, {From: "ty", To: "chi", Duplicate: 2}},
 	} {
 		top := topo(Route{Name: "r", Entry: "hk", Port: 1, Transport: "udp",
-			Via: []string{"ty", "chi"}, Target: hypixel(), Legs: legs})
+			Via: []string{"ty", "chi"}, Target: backend(), Legs: legs})
 		if err := top.Routes[0].normalize(); err != nil {
 			t.Fatal(err)
 		}
@@ -248,7 +248,7 @@ func TestLegMustBeOnAPath(t *testing.T) {
 }
 
 func TestLoopRejected(t *testing.T) {
-	top := topo(Route{Name: "r", Entry: "hk", Port: 1, Transport: "udp", Exit: "chi", Target: hypixel(),
+	top := topo(Route{Name: "r", Entry: "hk", Port: 1, Transport: "udp", Exit: "chi", Target: backend(),
 		Paths: []Path{
 			{Via: []string{"ty", "sg"}},
 			{Via: []string{"sg", "ty"}},
@@ -289,7 +289,7 @@ func TestNormalizeRejectsImpossibleRoutes(t *testing.T) {
 
 func TestRepeatedNodeRejected(t *testing.T) {
 	top := topo(Route{Name: "r", Entry: "hk", Port: 1, Transport: "udp",
-		Via: []string{"ty", "ty", "chi"}, Target: hypixel()})
+		Via: []string{"ty", "ty", "chi"}, Target: backend()})
 	if err := top.Routes[0].normalize(); err != nil {
 		t.Fatal(err)
 	}
@@ -301,8 +301,8 @@ func TestRepeatedNodeRejected(t *testing.T) {
 // Redeploying must not roll the keys: every node would have to be updated at the
 // same instant or the chain would break in the middle.
 func TestKeysAreStableAcrossExpands(t *testing.T) {
-	top := topo(Route{Name: "hypixel", Entry: "hk", Port: 25565, Transport: "udp",
-		Via: []string{"ty", "chi"}, Target: hypixel()})
+	top := topo(Route{Name: "backend", Entry: "hk", Port: 25565, Transport: "udp",
+		Via: []string{"ty", "chi"}, Target: backend()})
 	first, _ := expandOK(t, top)
 	second, _, err := expand(top)
 	if err != nil {
@@ -318,7 +318,7 @@ func TestKeysAreStableAcrossExpands(t *testing.T) {
 // A single UDP leg with no relay in between is a legitimate topology.
 func TestExpandUDPDirect(t *testing.T) {
 	top := topo(Route{Name: "r", Entry: "hk", Port: 25565, Transport: "udp",
-		Via: []string{"chi"}, Target: hypixel()})
+		Via: []string{"chi"}, Target: backend()})
 	cfgs, _ := expandOK(t, top)
 	hk := only1(t, cfgs, "hk")
 	chi := only1(t, cfgs, "chi")
@@ -333,16 +333,16 @@ func TestExpandUDPDirect(t *testing.T) {
 // A node that names itself as its own exit is an ingress that dials the target:
 // one listener, no hop, and no port allocated for anyone to dial it on.
 func TestExpandNoHops(t *testing.T) {
-	top := topo(Route{Name: "r", Entry: "chi", Port: 30001, Exit: "chi", Target: hypixel()})
+	top := topo(Route{Name: "r", Entry: "chi", Port: 30001, Exit: "chi", Target: backend()})
 	cfgs, checks := expandOK(t, top)
 	if len(cfgs) != 1 {
 		t.Fatalf("%d nodes configured, want only the entry", len(cfgs))
 	}
 	chi := only1(t, cfgs, "chi")
-	if chi.Bind != ":30001" || chi.Upstream != "mc.hypixel.net:25565" || len(chi.Hops) != 0 {
+	if chi.Bind != ":30001" || chi.Upstream != "mc.example.com:25565" || len(chi.Hops) != 0 {
 		t.Errorf("chi: %+v", chi)
 	}
-	if chi.Minecraft == nil || chi.Minecraft.RewriteHost != "mc.hypixel.net" {
+	if chi.Minecraft == nil || chi.Minecraft.RewriteHost != "mc.example.com" {
 		t.Errorf("chi is not an ingress: %+v", chi.Minecraft)
 	}
 	if len(chi.AllowFrom) != 0 {
@@ -357,10 +357,10 @@ func TestExpandNoHops(t *testing.T) {
 // a key of its own that survives re-expansion; nothing else does.
 func TestControlLinkOnWhitelistedEntries(t *testing.T) {
 	top := topo(
-		Route{Name: "hypixel", Entry: "hk", Port: 25565, Transport: "udp",
-			Via: []string{"ty", "chi"}, Target: hypixel(), Whitelist: "whitelist.txt"},
-		Route{Name: "hypixel-ty", Entry: "ty", Port: 25565, Transport: "udp",
-			Via: []string{"chi"}, Target: hypixel(), Whitelist: "whitelist.txt"},
+		Route{Name: "backend", Entry: "hk", Port: 25565, Transport: "udp",
+			Via: []string{"ty", "chi"}, Target: backend(), Whitelist: "whitelist.txt"},
+		Route{Name: "backend-ty", Entry: "ty", Port: 25565, Transport: "udp",
+			Via: []string{"chi"}, Target: backend(), Whitelist: "whitelist.txt"},
 	)
 	cfgs, _ := expandOK(t, top)
 
@@ -389,8 +389,8 @@ func TestControlLinkOnWhitelistedEntries(t *testing.T) {
 }
 
 func TestNoControlLinkWithoutWhitelist(t *testing.T) {
-	top := topo(Route{Name: "hypixel", Entry: "hk", Port: 25565,
-		Via: []string{"ty", "chi"}, Target: hypixel()})
+	top := topo(Route{Name: "backend", Entry: "hk", Port: 25565,
+		Via: []string{"ty", "chi"}, Target: backend()})
 	cfgs, _ := expandOK(t, top)
 	for n, c := range cfgs {
 		if c.Control != nil {
@@ -401,10 +401,10 @@ func TestNoControlLinkWithoutWhitelist(t *testing.T) {
 
 func twoEntries() *Topology {
 	return topo(
-		Route{Name: "hypixel", Entry: "hk", Port: 25565, Transport: "udp",
-			Via: []string{"ty", "chi"}, Target: hypixel(), Whitelist: "whitelist.txt"},
-		Route{Name: "hypixel-ty", Entry: "ty", Port: 25565, Transport: "udp",
-			Via: []string{"chi"}, Target: hypixel(), Whitelist: "whitelist.txt"},
+		Route{Name: "backend", Entry: "hk", Port: 25565, Transport: "udp",
+			Via: []string{"ty", "chi"}, Target: backend(), Whitelist: "whitelist.txt"},
+		Route{Name: "backend-ty", Entry: "ty", Port: 25565, Transport: "udp",
+			Via: []string{"chi"}, Target: backend(), Whitelist: "whitelist.txt"},
 	)
 }
 
@@ -491,7 +491,7 @@ func TestDiscordBlockIsChecked(t *testing.T) {
 		{"no guild", twoEntries(), &Discord{Roles: map[string]botcfg.Role{"r": {Accounts: 1}}}},
 		{"no roles", twoEntries(), &Discord{Guild: "g"}},
 		{"unknown node", twoEntries(), &Discord{Node: "mars", Guild: "g", Roles: map[string]botcfg.Role{"r": {Accounts: 1}}}},
-		{"no whitelist", topo(Route{Name: "hypixel", Entry: "hk", Port: 25565, Via: []string{"ty", "chi"}, Target: hypixel()}),
+		{"no whitelist", topo(Route{Name: "backend", Entry: "hk", Port: 25565, Via: []string{"ty", "chi"}, Target: backend()}),
 			&Discord{Guild: "g", Roles: map[string]botcfg.Role{"r": {Accounts: 1}}}},
 	} {
 		tc.top.Discord = tc.d
@@ -556,14 +556,14 @@ func TestOnlyTheExitDialsTheTarget(t *testing.T) {
 		// hk races two ways into chi, one of them through a node that is neither
 		// an ingress nor an exit.
 		Route{Name: "raced", Entry: "hk", Port: 30001, Transport: "udp", Duplicate: 1,
-			Exit: "chi", Target: hypixel(),
+			Exit: "chi", Target: backend(),
 			Paths: []Path{{Via: []string{"ty"}}, {Via: []string{"ty", "sg"}}}},
 		// and chi is an ingress of its own, dialling the backend itself.
-		Route{Name: "direct", Entry: "chi", Port: 30002, Exit: "chi", Target: hypixel()},
+		Route{Name: "direct", Entry: "chi", Port: 30002, Exit: "chi", Target: backend()},
 	)
 	cfgs, _ := expandOK(t, top)
 
-	target := hypixel().Addr
+	target := backend().Addr
 	for node, c := range cfgs {
 		for _, l := range c.Listeners {
 			dials := l.Upstream == target

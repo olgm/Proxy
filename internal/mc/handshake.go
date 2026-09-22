@@ -4,7 +4,7 @@
 // The handshake is the only packet we ever parse. Everything after it is opaque:
 // the client encrypts from the byte after it sends Encryption Response, and the
 // compression threshold is negotiated inside that encrypted stream, so there is no
-// point at which parsing could resume. See agents/hypixel-protocol.md.
+// point at which parsing could resume. See agents/minecraft-protocol.md.
 package mc
 
 import (
@@ -122,12 +122,17 @@ func ReadHandshake(r *bufio.Reader) (*Handshake, error) {
 // RewriteAddress replaces the hostname while preserving Forge/FML markers and
 // dropping BungeeCord-style forwarded identity fields.
 //
-// Hypixel authenticates the address the client claims to have connected to, so it
-// must read as mc.hypixel.net. Forge clients append "\0FML\0" (or FML2/FML3) and
+// Some backends, Hypixel among them, authenticate the address the client claims to
+// have connected to, so it must read as the target's own hostname; that is what
+// rewrite_host is for. An empty host is a no-op: the client's own address, extras
+// included, is left untouched. Forge clients append "\0FML\0" (or FML2/FML3) and
 // break if it is lost. BungeeCord forwarding appends the client IP, UUID and signed
 // profile properties; forwarding client-supplied identity upstream is never correct,
 // so anything that is not an FML marker is discarded.
 func (h *Handshake) RewriteAddress(host string) {
+	if host == "" {
+		return
+	}
 	parts := strings.Split(h.Address, "\x00")
 	if len(parts) > 1 && strings.HasPrefix(parts[1], "FML") {
 		h.Address = host + "\x00" + strings.Join(parts[1:], "\x00")
