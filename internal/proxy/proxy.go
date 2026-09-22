@@ -105,7 +105,8 @@ type Listener struct {
 	// which a node cannot work out for itself: Hops names the node after this one
 	// and says nothing about how many come after that. proxyctl fills it from the
 	// route, and it is read only to price a session — see chainCost. Zero on a
-	// direct exit, and taken as one on a tunnel deployed before this existed.
+	// direct exit, and treated as one whenever there is a tunnel stream but no
+	// configured value, since a stream that exists is itself the first leg.
 	//
 	// It is the longest path's length where an entry races several, which prices
 	// a raced session as if every leg carried what the busiest one did.

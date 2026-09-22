@@ -83,8 +83,6 @@ func (l *live) remove(id int64) {
 // A client that reconnects while its last attempt is still hanging open would
 // otherwise hold two at once: the feed announced the join twice and reported the
 // player as two online, and both were true of connections that really existed.
-// Observed on ch on 2026-09-08, where one player's dead first attempt and their
-// retry overlapped for eight seconds.
 //
 // The new connection wins. The old one is the one that stopped working — that is
 // why there is a new one — and a player watching their client reconnect wants

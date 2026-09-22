@@ -1,11 +1,11 @@
 // Package window aggregates timed probes into fixed windows and closes each one
 // into a distribution.
 //
-// It was probed's stats.go, moved here when triald needed to set a candidate
-// node's numbers beside probed's numbers for the node it would replace. That
-// comparison is only sound if both sides computed their percentiles the same
-// way, and two copies of a percentile drift apart the moment one of them is
-// touched. So the arithmetic lives once, and both services read it from here.
+// It is shared so that comparing a candidate node's numbers against the node it
+// would replace is sound: that only holds if both sides computed their
+// percentiles the same way, and two copies of a percentile drift apart the
+// moment one of them is touched. So the arithmetic lives once, and both
+// services read it from here.
 //
 // Two rules govern every number that leaves this package. A sample is filed
 // under the time it was sent. A window is not closed until one probe timeout

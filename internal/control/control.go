@@ -88,7 +88,7 @@ type Past struct {
 	//
 	// It is a new key rather than the old `wire`, which counted one direction of
 	// one leg and was divided by both directions of the payload wherever it was
-	// shown. A record written before v2.2.0 has no chain figure, which is the
+	// shown. A record with no chain figure predates this field, which is the
 	// honest answer: what it holds is not this.
 	Chain uint64 `json:"chain,omitempty"`
 }

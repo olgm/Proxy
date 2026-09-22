@@ -19,7 +19,7 @@ func (nothing) Close() error                { return nil }
 // comes back the other way. There is no tunnel to duplicate anything, so the
 // answer is exactly twice the payload — which is also the floor for every other
 // shape, and the reason the figure is worth showing on a route with no tunnel at
-// all. It used to be blank there.
+// all.
 func TestChainCostOfADirectExitIsBothEndsOfIt(t *testing.T) {
 	const up, down = 4200, 51700
 	if got := chainCost(nothing{}, 0, up, down); got != 2*(up+down) {

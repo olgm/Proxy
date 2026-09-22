@@ -1,9 +1,9 @@
 // Package jsonl appends records to a newline-delimited JSON file and keeps it
 // bounded, and reads the newest of them back.
 //
-// It was probed's dataset writer, moved here when proxyd needed to write down
-// finished sessions the same way. Both files are read by people with grep as
-// often as by anything here, which is what the format is for.
+// It is shared by every service that needs to write down finished sessions or
+// samples the same way. Both files are read by people with grep as often as by
+// anything here, which is what the format is for.
 package jsonl
 
 import (

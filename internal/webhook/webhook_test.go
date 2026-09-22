@@ -242,11 +242,11 @@ func TestCloseFlushesWhatWasQueued(t *testing.T) {
 	}
 }
 
-// A drop that happens while nothing else is queued still has to be reported. The
-// note used to be attached only to a message that was going out anyway, so a
-// drop with nothing left to carry it — the sender was busy, everything it had
-// was already posted, and the lines turned away were the last of them — took the
-// count away with it. The feed then looked quiet rather than incomplete.
+// A drop that happens while nothing else is queued still has to be reported on
+// its own: if the note only ever rode along with a message that was already
+// going out, a drop with nothing left to carry it — the sender busy, everything
+// it had already posted, and the lines turned away the last of them — would take
+// the count away with it, and the feed would look quiet rather than incomplete.
 func TestADropIsReportedEvenWithNothingElseToSay(t *testing.T) {
 	c, url := newCapture(t)
 	q := NewQueue(url, 4, 5*time.Millisecond)

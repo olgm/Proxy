@@ -9,8 +9,8 @@ import (
 )
 
 // One account, one session. A client that reconnects while its last attempt is
-// still hanging open used to hold two at once, so the feed announced the join
-// twice and the roster reported one player as two.
+// still hanging open must not hold two at once, or the feed announces the join
+// twice and the roster reports one player as two.
 func TestReconnectReplacesTheSessionItLeftOpen(t *testing.T) {
 	feed := newFeedCapture(t)
 	ingress, s := feedIngress(t, holdingBackend(t), whitelistFile(t, "Notch:"+notchUUID+"\n"), feed.url)
