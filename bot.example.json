@@ -1,0 +1,20 @@
+{
+  "guild": "111111111111111111",
+  "roles": {
+    "222222222222222222": {"accounts": 1},
+    "333333333333333333": {"accounts": 3},
+    "444444444444444444": {"manage": true}
+  },
+  "audit_channel": "555555555555555555",
+  "primary": "hk",
+  "entries": [
+    {"node": "hk", "addr": "198.51.100.10:9010", "key": "base64-placeholder-key-hk=="},
+    {"node": "ch", "addr": "198.51.100.30:9011", "key": "base64-placeholder-key-ch=="}
+  ],
+  "online_nodes": ["hk", "ch"],
+  "probes": [
+    {"node": "hk", "addr": "198.51.100.10:9400", "key": "base64-placeholder-probe-key-hk=="},
+    {"node": "ch", "addr": "198.51.100.30:9400", "key": "base64-placeholder-probe-key-ch=="}
+  ],
+  "status_ping": "666666666666666666"
+}

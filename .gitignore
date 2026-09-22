@@ -1,6 +1,5 @@
 .claude/
 CLAUDE.md
-agents/
 reference/
 topology.json
 trial.json
@@ -12,3 +11,5 @@ whitelist.txt.refreshed
 .env.*
 dirty-ips.json
 *.bak
+private/
+!.env.example
