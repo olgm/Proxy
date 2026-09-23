@@ -29,6 +29,8 @@ bullets below.
   answer goes in the logout line as `net=` and `from=` and in the session record as
   `geo`; like the IP, it never reaches the feed. Off by default: it is the one
   thing here that tells a third party anything about a player.
+- **`/watch` shows both** on every finished session that has them: `rtt 33 ms,
+  p90 36` and the place and network.
 - **The README is a front page and the guides live in `docs/`.** The 1,191-line
   README is now a short overview plus an index; deploy, transport, whitelist,
   Discord bot, probe and trial detail each moved to their own file under `docs/`.

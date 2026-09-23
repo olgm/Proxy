@@ -47,13 +47,18 @@ the next:
 `Notch` on **hk** from `203.0.113.9` · 12m
 
 **Sessions** — page 1
-`Notch` **hk** `203.0.113.9` · 5 Sep 11:00 → 11:42 (42m) · up 4.1MB down 51.7MB · chain 111.6MB
+`Notch` **hk** `203.0.113.9` · 5 Sep 11:00 → 11:42 (42m) · up 4.1MB down 51.7MB · chain 111.6MB · rtt 33 ms, p90 36 · Seoul, KR · AS4766 Korea Telecom
 ```
 
 **This is the one place the client IP is reported**, and why the command is
 managers-only and the reply is always ephemeral. One manager reading a private
 reply is a different audience from a channel, which is why the `sessions` feed
-does not carry it.
+does not carry it. The same goes for where the player's network is.
+
+`rtt` is the player's own round trip to the entry, median and p90 over the
+session; the logout line in the node's journal has the rest (docs/deploy.md#logs).
+The place and network are there only on an entry with `"ipinfo": true`. A session
+recorded before either was measured shows neither.
 
 Which accounts belong to the member is decided by the tag on their whitelist
 lines, as everywhere else; the sessions are then found by uuid. So `/watch` shows

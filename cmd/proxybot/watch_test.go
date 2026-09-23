@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/olgm/proxy/internal/control"
+	"github.com/olgm/proxy/internal/ipinfo"
 )
 
 const (
@@ -154,5 +155,17 @@ func TestSessionLineCarriesWhatWasAskedFor(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("session line is missing %q: %s", want, got)
 		}
+	}
+	// A record from before either was measured says nothing about them.
+	if strings.Contains(got, "rtt") || strings.Contains(got, "unknown") {
+		t.Errorf("session line invents a round trip or a place: %s", got)
+	}
+
+	p := pastAt("hk", "Notch", notchUUID, 0)
+	p.RTT = &control.RTT{Min: 31.2, P50: 33.0, P90: 35.8, Max: 61.4, Var: 1.9, Retrans: 12, N: 500}
+	p.Geo = &ipinfo.Info{Net: "203.0.113.0/24", City: "Seoul", Region: "Seoul", Country: "KR", Org: "AS4766 Korea Telecom"}
+	got = sessionLine(p)
+	if !strings.HasSuffix(got, " · rtt 33 ms, p90 36 · Seoul, KR · AS4766 Korea Telecom") {
+		t.Errorf("session line lost the round trip or the place: %s", got)
 	}
 }

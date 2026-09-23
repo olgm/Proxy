@@ -175,7 +175,8 @@ func (b *bot) history(uuids []string, page int) ([]control.Past, bool, error) {
 	return all[start:end], len(all) > end, nil
 }
 
-// sessionLine is one finished session: who, where from, when, and what it cost.
+// sessionLine is one finished session: who, where from, when, what it cost, and
+// the player's own round trip to the entry.
 func sessionLine(p control.Past) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "`%s` **%s** `%s` · %s → %s (%s) · up %s down %s",
@@ -185,6 +186,12 @@ func sessionLine(p control.Past) string {
 		size(p.Up), size(p.Down))
 	if p.Chain > 0 {
 		fmt.Fprintf(&b, " · chain %s", size(int64(p.Chain)))
+	}
+	if r := p.RTT; r != nil {
+		fmt.Fprintf(&b, " · rtt %.0f ms, p90 %.0f", r.P50, r.P90)
+	}
+	if p.Geo != nil {
+		fmt.Fprintf(&b, " · %s", p.Geo)
 	}
 	return b.String()
 }
