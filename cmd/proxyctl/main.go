@@ -42,6 +42,10 @@ type Topology struct {
 	// Feeds, when set, post what the chain is doing to Discord webhooks. Every
 	// feed is off until it is named here, and all of them are optional.
 	Feeds *Feeds `json:"feeds,omitempty"`
+	// IPInfo, when true, has every entry look up where its players' networks
+	// are on ipinfo.io, by prefix, and record it with the session. Off unless
+	// set: it is the one thing here that tells a third party about a player.
+	IPInfo bool `json:"ipinfo,omitempty"`
 
 	keys *keyring
 	// nextPort is where automatic allocation got to, so probed's ports carry on
@@ -705,6 +709,7 @@ func expand(t *Topology) (map[string]*proxy.Config, []check, error) {
 	// reads. It holds what the journal line already holds, and is bounded.
 	for _, name := range sessionFeedNodes(cfgs) {
 		cfgs[name].SessionLog = sessionLogPath
+		cfgs[name].IPInfo = t.IPInfo
 	}
 	seeds, err := t.whitelistSeeds()
 	if err != nil {

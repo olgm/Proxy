@@ -79,6 +79,7 @@ costs the players their game and costs the record nothing.
 | `feeds.probe.windows` | which probe windows reach the channel. Default: the longest |
 | `feeds.online.nodes` | order entries appear in the roster |
 | `feeds.status.ping_role` | role id a transition pings. Default: ping nobody |
+| `ipinfo` | optional; `true` has every entry look up where its players' networks are, by /24 — see [Logs](#logs) |
 
 Hop ports are allocated automatically, and so is one control port per entry with a
 whitelist. `config` prints the map.
@@ -252,7 +253,7 @@ the player sees in game, to within the backend's own processing. A session no
 round trip could be read for leaves all three off.
 
 `net` and `from` are where the player's network is, on an entry with ipinfo
-lookups on: the /24 (IPv6: /48) their address is in, and what ipinfo.io said about
+lookups on (`"ipinfo": true` in topology.json): the /24 (IPv6: /48) their address is in, and what ipinfo.io said about
 it — place, then AS. The node asks about the prefix, never the address, once per
 prefix for as long as it runs, and writes `ipinfo: <prefix> is <answer>` the first
 time. A session that ended before the answer came back, or on a node with lookups

@@ -590,3 +590,28 @@ func TestOnlyTheExitDialsTheTarget(t *testing.T) {
 		}
 	}
 }
+
+// ipinfo is a fleet-wide switch that lands on the entries, which are the only
+// nodes that see a player's address. Off unless the topology says so.
+func TestIPInfoReachesEveryEntryAndNothingElse(t *testing.T) {
+	route := Route{Name: "backend", Entry: "hk", Port: 25565,
+		Via: []string{"ty", "chi"}, Target: backend()}
+	cfgs, _ := expandOK(t, topo(route))
+	for name, c := range cfgs {
+		if c.IPInfo {
+			t.Errorf("%s looks players up with no ipinfo in the topology", name)
+		}
+	}
+
+	top := topo(route)
+	top.IPInfo = true
+	cfgs, _ = expandOK(t, top)
+	if !cfgs["hk"].IPInfo {
+		t.Error("the entry was not told to look players up")
+	}
+	for _, name := range []string{"ty", "chi"} {
+		if cfgs[name].IPInfo {
+			t.Errorf("%s is a relay and was told to look players up", name)
+		}
+	}
+}

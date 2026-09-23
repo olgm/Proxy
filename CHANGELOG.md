@@ -20,8 +20,8 @@ bullets below.
   acknowledgement anyway — and it is the one leg of a player's ping that probed and
   the tunnel never see. Until now the only way to answer "is it their connection or
   ours" was an `ss -ti` on the entry while the player happened to be online.
-- **An entry can say where a player's network is.** With `ipinfo` set in its
-  config, an entry asks ipinfo.io about each new /24 (IPv6: /48) a whitelisted
+- **An entry can say where a player's network is.** With `"ipinfo": true` in
+  topology.json, every entry asks ipinfo.io about each new /24 (IPv6: /48) a whitelisted
   login arrives from — the prefix's first address, never the player's own — and
   keeps the answer for as long as it runs: place and AS, as in `Seoul, KR · AS4766
   Korea Telecom`. The lookup starts after the whitelist has let the login in, so a
