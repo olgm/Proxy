@@ -29,6 +29,7 @@ Notes for agents working on this repo.
 | `internal/mc` | handshake, Login Start and the status exchange: parse / rewrite / encode. The only packets we parse. Also the MOTD document and its render. |
 | `internal/whitelist` | `ign:uuid` list: match, hot reload, daily name refresh, miss-path lookup. |
 | `internal/mojang` | profile API client and the rate limiters guarding it. |
+| `internal/ipinfo` | where a player's network is: ipinfo.io asked about the /24 or /48 an address is in, never the address, once per prefix. |
 | `internal/tunnel` | UDP transport: framing, per-leg AEAD, NACK repair, duplication, racing, ordering at the exit. |
 | `internal/sealed` | the sealed TCP exchange both links put on the wire: a challenge, then one AEAD frame each way. Was control's; shared the moment probed needed the same thing. |
 | `internal/control` | the control link: sealed request/reply over TCP, `list`/`add`/`remove` against a whitelist. Server in proxyd, client in proxyctl and the bot. |
@@ -134,7 +135,7 @@ Notes for agents working on this repo.
   posts a window off the flush; both queues drop rather than block, post early when
   they are filling, and report what they dropped even with nothing else to send.
   The client IP goes in the journal, in the session log and in `/watch`, never in a
-  channel. `internal/webhook` is stdlib because two of its three callers are the
+  channel, and so does where its network is. `internal/webhook` is stdlib because two of its three callers are the
   dependency-free node binaries.
 - A session's whole account of itself is written by the goroutine relaying it, in
   its tail: record, journal line, feed line. So proxyd must never be killed on top

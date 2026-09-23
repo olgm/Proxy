@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/olgm/proxy/internal/control"
+	"github.com/olgm/proxy/internal/ipinfo"
 	"github.com/olgm/proxy/internal/jsonl"
 	"github.com/olgm/proxy/internal/mc"
 )
@@ -130,6 +131,31 @@ func TestSessionFeedNeverCarriesTheClientIP(t *testing.T) {
 
 	if all := cap.all(); strings.Contains(all, "127.0.0.1") {
 		t.Fatalf("the feed carries the client IP:\n%s", all)
+	}
+}
+
+// Where a player's network is sits beside their IP, in the journal and in /watch,
+// and for the same reason never in a channel.
+func TestSessionFeedNeverCarriesWhereAPlayerIs(t *testing.T) {
+	cap := newFeedCapture(t)
+	f := newSessionFeed(cap.url)
+	geo := &ipinfo.Info{Net: "203.0.113.0/24", City: "Seoul", Region: "Seoul", Country: "KR", Org: "AS4766 Korea Telecom"}
+	f.logout(Session{Node: "ty2", Name: "Notch", Geo: geo})
+	f.Close()
+	all := cap.all()
+	if !strings.Contains(all, "`Notch` left") {
+		t.Fatalf("no logout posted:\n%s", all)
+	}
+	for _, leak := range []string{"203.0.113", "Seoul", "KR", "AS4766", "Korea Telecom"} {
+		if strings.Contains(all, leak) {
+			t.Errorf("the feed carries %q:\n%s", leak, all)
+		}
+	}
+	if got, want := geoPart(geo), ` net=203.0.113.0/24 from="Seoul, KR · AS4766 Korea Telecom"`; got != want {
+		t.Errorf("logout line part = %q, want %q", got, want)
+	}
+	if got := geoPart(nil); got != "" {
+		t.Errorf("nothing known rendered as %q", got)
 	}
 }
 

@@ -52,6 +52,12 @@ past a node with no hop left.
 `proxybot` talks to Discord, Mojang (through proxyd) and the entries' control
 links, and nothing else; it holds no way to reach the backend.
 
+An entry whose config sets `ipinfo` also reaches ipinfo.io, once for each new /24
+(IPv6: /48) a whitelisted login arrives from, and asks about that prefix's first
+address. The player's own address never leaves the node. That is the rule for
+anything added later that looks a player's network up: a prefix, never the /32,
+and only after the whitelist has let the login in.
+
 ## Whitelist, and what it does not cover
 
 The ingress whitelist (`README.md`, "Whitelist") keeps uninvited players off the

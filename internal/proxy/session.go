@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/olgm/proxy/internal/control"
+	"github.com/olgm/proxy/internal/ipinfo"
 	"github.com/olgm/proxy/internal/tunnel"
 	"github.com/olgm/proxy/internal/webhook"
 )
@@ -41,6 +42,9 @@ type Session struct {
 	// RTT is the player's own leg to this node, nil when none could be read. See
 	// clientRTT.
 	RTT *control.RTT
+	// Geo is where the player's network is, nil when lookups are off or had no
+	// answer by the time the session ended. Like IP, it never reaches the feed.
+	Geo *ipinfo.Info
 	// Online is this node's count of relayed logins at the moment of the event.
 	// A node knows its own and no others, which is why the fleet-wide roster is
 	// a separate feed that only the bot can build.
@@ -140,4 +144,13 @@ func chainCost(u halfCloser, legs int, up, down int64) uint64 {
 		legs = 1 // there is a stream, so there is at least the leg just measured
 	}
 	return ends + 2*uint64(legs)*st.Traffic().Total()
+}
+
+// geoPart is the logout line's account of where the player's network is. Empty
+// when nothing is known, so a line never claims a place it was not told.
+func geoPart(g *ipinfo.Info) string {
+	if g == nil {
+		return ""
+	}
+	return fmt.Sprintf(" net=%s from=%q", g.Net, g.String())
 }

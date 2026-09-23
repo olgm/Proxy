@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/olgm/proxy/internal/ipinfo"
 	"github.com/olgm/proxy/internal/mojang"
 	"github.com/olgm/proxy/internal/sealed"
 	"github.com/olgm/proxy/internal/whitelist"
@@ -94,6 +95,9 @@ type Past struct {
 	// RTT is the player's own leg, to the entry. Absent on a record from before
 	// it was measured, and on a session no round trip could be read for.
 	RTT *RTT `json:"rtt,omitempty"`
+	// Geo is where the player's network is, as ipinfo.io placed the prefix
+	// their address is in. Absent where lookups are off.
+	Geo *ipinfo.Info `json:"geo,omitempty"`
 }
 
 // RTT is a session's client leg — the player to the entry — as the entry's kernel

@@ -234,7 +234,7 @@ A node logs one line when a session opens and one when it closes:
 
 ```
 :25565: login 203.0.113.9 name="Notch" uuid="069a79f4-…" proto=47 online=3
-:25565: logout 203.0.113.9 name="Notch" uuid="069a79f4-…" for 42m18s up=4.1MB down=51.7MB chain=111.6MB rtt=31.2/33.0/35.8/61.4ms rttvar=1.9ms retrans=12 online=2
+:25565: logout 203.0.113.9 name="Notch" uuid="069a79f4-…" for 42m18s up=4.1MB down=51.7MB chain=111.6MB rtt=31.2/33.0/35.8/61.4ms rttvar=1.9ms retrans=12 net=203.0.113.0/24 from="Seoul, KR · AS4766 Korea Telecom" online=2
 ```
 
 `up` and `down` are payload: what the session carried. `chain` is what carrying it
@@ -250,6 +250,13 @@ which is loss on their way down. Nothing is sent to measure any of it. Add the
 chain's own round trip — probed's `chain` class for that route, such as `hk>ch` — and you have the ping
 the player sees in game, to within the backend's own processing. A session no
 round trip could be read for leaves all three off.
+
+`net` and `from` are where the player's network is, on an entry with ipinfo
+lookups on: the /24 (IPv6: /48) their address is in, and what ipinfo.io said about
+it — place, then AS. The node asks about the prefix, never the address, once per
+prefix for as long as it runs, and writes `ipinfo: <prefix> is <answer>` the first
+time. A session that ended before the answer came back, or on a node with lookups
+off, has neither.
 
 `name` and `uuid` come from Login Start, so they are the client's own word — see
 docs/whitelist.md#what-it-does-not-do. A route with no whitelist does not read that

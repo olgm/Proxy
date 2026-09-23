@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/olgm/proxy/internal/control"
+	"github.com/olgm/proxy/internal/ipinfo"
 	"github.com/olgm/proxy/internal/jsonl"
 	"github.com/olgm/proxy/internal/mc"
 	"github.com/olgm/proxy/internal/mojang"
@@ -70,6 +71,12 @@ type Config struct {
 	// therefore a size and not a time: on a busy node the oldest sessions fall
 	// off sooner. Default 64.
 	MaxSessionLogMB int `json:"max_session_log_mb,omitempty"`
+	// IPInfo looks up where each player's network is — place and AS — on
+	// ipinfo.io, by the /24 (IPv6: /48) their address is in, never the address,
+	// and records it with the session. Off unless set, because it is the one
+	// thing here that tells a third party anything about a player. Only a
+	// whitelisted ingress asks, and only for a login the whitelist let in.
+	IPInfo bool `json:"ipinfo,omitempty"`
 }
 
 // Control is a TCP listener answering whitelist requests from the Discord bot,
@@ -212,6 +219,9 @@ type server struct {
 	// live is the node's register of sessions in progress, shared by every
 	// listener on it and answered over the control link.
 	live *live
+	// geo is what the node knows about its players' networks. Nil, and knowing
+	// nothing, unless the config turned lookups on.
+	geo *ipinfo.Client
 }
 
 // halfCloser is whatever the next leg turns out to be: a TCP connection on a
@@ -330,13 +340,19 @@ func start(cfg *Config) (*node, error) {
 			n.live.log, n.live.path = w, cfg.SessionLog
 		}
 	}
+	// One cache for the node, like the log: a player's network is the same
+	// answer whichever ingress they came in on.
+	var geo *ipinfo.Client
+	if cfg.IPInfo && gated(cfg) {
+		geo = ipinfo.New(ipinfo.DefaultURL)
+	}
 	var wg = &n.wg
 	for _, l := range cfg.Listeners {
 		s, err := newServer(l)
 		if err != nil {
 			return nil, err
 		}
-		s.node, s.feed, s.live = cfg.Name, feed, n.live
+		s.node, s.feed, s.live, s.geo = cfg.Name, feed, n.live, geo
 		n.servers = append(n.servers, s)
 		mode := l.Role()
 		if s.wl != nil {
@@ -787,6 +803,9 @@ func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake) {
 		Node: s.node, IP: ip, Name: name, UUID: uuid,
 		Proto: int(h.ProtocolVersion), Start: time.Now(),
 	}
+	// Past the whitelist, so a stranger cannot spend lookups; off the relay
+	// path, so a player never waits on it. The answer is read back at logout.
+	s.geo.Watch(ip)
 	s.countMu.Lock()
 	sess.Online = s.online.Add(1)
 	// Both sides, so a shutdown unblocks the download direction too. The client
@@ -808,15 +827,16 @@ func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake) {
 	sess.End, sess.Up, sess.Down = time.Now(), up, down
 	sess.Chain = chainCost(u, s.ChainLegs, up, down)
 	sess.RTT = rtt.end()
+	sess.Geo = s.geo.Get(ip)
 	s.live.record(sess)
 	// The count and the line that reports it, together. They are two steps, and
 	// two sessions ending at once would otherwise be able to print their counts
 	// in the opposite order to the counting.
 	s.countMu.Lock()
 	sess.Online = s.online.Add(-1)
-	log.Printf("%s: logout %s name=%q uuid=%q for %s up=%s down=%s chain=%s%s online=%d",
+	log.Printf("%s: logout %s name=%q uuid=%q for %s up=%s down=%s chain=%s%s%s online=%d",
 		s.Bind, ip, name, uuid, sess.For(),
-		size(up), size(down), size(int64(sess.Chain)), rttPart(sess.RTT), sess.Online)
+		size(up), size(down), size(int64(sess.Chain)), rttPart(sess.RTT), geoPart(sess.Geo), sess.Online)
 	s.feed.logout(sess)
 	s.countMu.Unlock()
 }
