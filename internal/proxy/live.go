@@ -160,6 +160,7 @@ func (l *live) record(s Session) {
 	l.log.Write(control.Past{
 		Name: s.Name, UUID: s.UUID, IP: s.IP, Proto: s.Proto,
 		Start: s.Start, End: s.End, Up: s.Up, Down: s.Down, Chain: s.Chain,
+		RTT: s.RTT,
 	})
 }
 

@@ -8,6 +8,18 @@ what changed lives in the repo: `topology.json`, `whitelist.txt`, `trial.json` a
 two nat tables. As with v2.3.1, this entry is the only place the change leaves a
 mark.
 
+The session record has changed since, in code that is not deployed yet: the first
+bullets below.
+
+- **Every session records the player's own leg.** The entry reads the client
+  connection's `TCP_INFO` every five seconds and once more as it ends: the lowest
+  round trip the kernel saw, the median, p90 and worst of its smoothed round trip,
+  the median of its deviation, and how many segments it sent the player again. It
+  goes in the logout line as `rtt=min/p50/p90/max rttvar= retrans=` and in the session
+  record as `rtt`. Nothing is sent to measure it — the kernel times every
+  acknowledgement anyway — and it is the one leg of a player's ping that probed and
+  the tunnel never see. Until now the only way to answer "is it their connection or
+  ours" was an `ss -ti` on the entry while the player happened to be online.
 - **The README is a front page and the guides live in `docs/`.** The 1,191-line
   README is now a short overview plus an index; deploy, transport, whitelist,
   Discord bot, probe and trial detail each moved to their own file under `docs/`.

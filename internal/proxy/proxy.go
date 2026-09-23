@@ -800,21 +800,23 @@ func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake) {
 	s.feed.login(sess)
 	s.countMu.Unlock()
 
+	rtt := watchRTT(c)
 	up, down, _, _ := relay(c, u)
 
 	s.live.remove(id)
 
 	sess.End, sess.Up, sess.Down = time.Now(), up, down
 	sess.Chain = chainCost(u, s.ChainLegs, up, down)
+	sess.RTT = rtt.end()
 	s.live.record(sess)
 	// The count and the line that reports it, together. They are two steps, and
 	// two sessions ending at once would otherwise be able to print their counts
 	// in the opposite order to the counting.
 	s.countMu.Lock()
 	sess.Online = s.online.Add(-1)
-	log.Printf("%s: logout %s name=%q uuid=%q for %s up=%s down=%s chain=%s online=%d",
+	log.Printf("%s: logout %s name=%q uuid=%q for %s up=%s down=%s chain=%s%s online=%d",
 		s.Bind, ip, name, uuid, sess.For(),
-		size(up), size(down), size(int64(sess.Chain)), sess.Online)
+		size(up), size(down), size(int64(sess.Chain)), rttPart(sess.RTT), sess.Online)
 	s.feed.logout(sess)
 	s.countMu.Unlock()
 }

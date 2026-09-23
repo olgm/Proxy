@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/olgm/proxy/internal/control"
 	"github.com/olgm/proxy/internal/tunnel"
 	"github.com/olgm/proxy/internal/webhook"
 )
@@ -37,6 +38,9 @@ type Session struct {
 	// Chain is what the session cost the fleet in traffic a VPS bills for: every
 	// byte in or out of every node that carried it. See chainCost.
 	Chain uint64
+	// RTT is the player's own leg to this node, nil when none could be read. See
+	// clientRTT.
+	RTT *control.RTT
 	// Online is this node's count of relayed logins at the moment of the event.
 	// A node knows its own and no others, which is why the fleet-wide roster is
 	// a separate feed that only the bot can build.

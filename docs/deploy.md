@@ -234,12 +234,22 @@ A node logs one line when a session opens and one when it closes:
 
 ```
 :25565: login 203.0.113.9 name="Notch" uuid="069a79f4-…" proto=47 online=3
-:25565: logout 203.0.113.9 name="Notch" uuid="069a79f4-…" for 42m18s up=4.1MB down=51.7MB chain=111.6MB online=2
+:25565: logout 203.0.113.9 name="Notch" uuid="069a79f4-…" for 42m18s up=4.1MB down=51.7MB chain=111.6MB rtt=31.2/33.0/35.8/61.4ms rttvar=1.9ms retrans=12 online=2
 ```
 
 `up` and `down` are payload: what the session carried. `chain` is what carrying it
 cost the fleet in billed traffic, across every node it crossed; see the `sessions`
 feed in docs/discord.md#sessions for how it is arrived at.
+
+`rtt` is the player's own leg, the one between them and this entry, as the entry's
+kernel timed the connection: `min/p50/p90/max` in milliseconds. `min` is the lowest
+round trip it saw, which is the path's floor; the other three are of the smoothed
+round trip, read every five seconds. `rttvar` is the median of the kernel's mean
+deviation, and `retrans` counts segments this node had to send the player again,
+which is loss on their way down. Nothing is sent to measure any of it. Add the
+chain's own round trip — probed's `chain` class for that route, such as `hk>ch` — and you have the ping
+the player sees in game, to within the backend's own processing. A session no
+round trip could be read for leaves all three off.
 
 `name` and `uuid` come from Login Start, so they are the client's own word — see
 docs/whitelist.md#what-it-does-not-do. A route with no whitelist does not read that

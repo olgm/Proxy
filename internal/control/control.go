@@ -91,6 +91,27 @@ type Past struct {
 	// shown. A record with no chain figure predates this field, which is the
 	// honest answer: what it holds is not this.
 	Chain uint64 `json:"chain,omitempty"`
+	// RTT is the player's own leg, to the entry. Absent on a record from before
+	// it was measured, and on a session no round trip could be read for.
+	RTT *RTT `json:"rtt,omitempty"`
+}
+
+// RTT is a session's client leg — the player to the entry — as the entry's kernel
+// timed it over the session, in milliseconds.
+type RTT struct {
+	// Min is the lowest round trip the connection saw: the path's floor. Zero
+	// when the kernel did not say.
+	Min float64 `json:"min,omitempty"`
+	// P50, P90 and Max are of the kernel's smoothed round trip, read every few
+	// seconds, and Var is the median of its mean deviation.
+	P50 float64 `json:"p50"`
+	P90 float64 `json:"p90"`
+	Max float64 `json:"max"`
+	Var float64 `json:"var"`
+	// Retrans is segments sent to the player again: loss on their way down.
+	Retrans uint32 `json:"retrans"`
+	// N is how many readings the percentiles came from.
+	N int `json:"n"`
 }
 
 // Live is one session in progress, as the node sees it. There are no byte counts
