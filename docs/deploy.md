@@ -103,6 +103,15 @@ sessions it had just taken; three seconds late makes that rare. An old process
 that takes the signal and does not go within twenty seconds, well past the most
 its own limits allow, is left running, with the old binary and config put back.
 
+Once the new process is up, the script watches it for two more seconds. One that
+comes up and then dies has already let go of the store, so the sessions it took
+are gone, and nothing can bring them back. The deploy still stops at that node
+rather than doing the same to the next, and the node goes back to the old binary:
+
+```
+handoff: the new proxyd (pid 41907) took over and then went, and its sessions with it; putting the old one back
+```
+
 `proxyctl status` prints `active handoff ready` for a node that can hand off. One
 that prints only `active` is running a `proxyd` from before this, or was started
 without the fd store; the next deploy restarts it, disconnecting everyone on it one

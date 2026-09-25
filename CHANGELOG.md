@@ -21,7 +21,8 @@ code that is not deployed yet: the first bullets below.
   pause of a few hundred milliseconds, and the session is written down once, when
   it ends. A new process that is not up in three seconds is replaced by the old
   binary and config, which take the untouched store back, and the deploy stops
-  there. The unit is now `Type=notify` with an fd store, which systemd keeps only
+  there. One that comes up and dies within two seconds has lost its sessions,
+  and the deploy stops there too, with the old binary back. The unit is now `Type=notify` with an fd store, which systemd keeps only
   while it means to restart the unit; restarts after 100 ms rather than 2 s; has
   no start limit, so a crash loop keeps retrying rather than leaving the unit
   failed; and may use `AF_UNIX` to reach its notify socket. The first deploy of

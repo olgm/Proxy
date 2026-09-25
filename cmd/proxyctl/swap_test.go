@@ -199,3 +199,25 @@ func TestSwapWaitsOutASlowHandoff(t *testing.T) {
 		t.Fatal("the new binary and config are not in place")
 	}
 }
+
+// A new proxyd that takes over and then dies had already let go of the store, so
+// its sessions are gone. The deploy must not hand off the next node the same way:
+// it fails, and the node goes back to the binary it was running.
+func TestSwapStopsWhenTheNewProcessDiesAfterTakingOver(t *testing.T) {
+	f := newFakeNode(t, "handoff ready",
+		`echo 101 > $D/pid; echo active > $D/active; echo 3 > $D/countdown; echo 'echo 102 > $D/pid' > $D/then`,
+		`echo 103 > $D/pid; echo active > $D/active`)
+	out, err := f.run(t)
+	if err == nil {
+		t.Fatalf("a new proxyd that died after taking over did not fail the deploy:\n%s", out)
+	}
+	if !strings.Contains(out, "took over and then went") {
+		t.Fatalf("output:\n%s", out)
+	}
+	if f.read(t, "bin/proxyd") != "old" || f.read(t, "etc/config.json") != "old config" {
+		t.Fatal("the old binary and config were not put back")
+	}
+	if log := f.read(t, "log"); !strings.Contains(log, "kill -KILL 102") {
+		t.Fatalf("the restarted new binary was not replaced:\n%s", log)
+	}
+}

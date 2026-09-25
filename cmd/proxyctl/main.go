@@ -1492,7 +1492,8 @@ $SUDO systemctl enable proxyd >/dev/null 2>&1
 func swapScript(bin, etc string) string {
 	return strings.NewReplacer("@BIN@", bin, "@ETC@", etc).Replace(`
 # gone OLD: OLD is no longer the main process. up OLD: another one is, and has
-# said it is ready, which under Type=notify is what "active" means.
+# said it is ready, which under Type=notify is what "active" means. stays NEW:
+# NEW is still the main process, and still active, two seconds on.
 gone() {
   for _ in $(seq 1 200); do
     [ "$(systemctl show -p MainPID --value proxyd)" != "$1" ] && return 0
@@ -1510,9 +1511,25 @@ up() {
   done
   return 1
 }
+stays() {
+  for _ in $(seq 1 20); do
+    sleep 0.1
+    [ "$(systemctl show -p MainPID --value proxyd)" = "$1" ] || return 1
+  done
+  [ "$(systemctl is-active proxyd)" = active ]
+}
 restore() {
   $SUDO mv -f @BIN@/proxyd.prev @BIN@/proxyd
   [ ! -f @ETC@/config.json.prev ] || $SUDO mv -f @ETC@/config.json.prev @ETC@/config.json
+}
+# rollback PID: the old binary and its config go back, PID, whatever the new one
+# is doing, is killed, and systemd starts the old one in its place.
+rollback() {
+  restore
+  [ "$1" = 0 ] || $SUDO kill -KILL "$1" 2>/dev/null || true
+  $SUDO systemctl reset-failed proxyd 2>/dev/null || true
+  $SUDO systemctl start --no-block proxyd
+  up "$1"
 }
 
 OLD=$(systemctl show -p MainPID --value proxyd 2>/dev/null || echo 0)
@@ -1532,34 +1549,34 @@ if [ "$(systemctl is-active proxyd 2>/dev/null)" = active ] &&
     echo "handoff: the old proxyd never handed off, and is still running"
     exit 1
   fi
-  if up "$OLD"; then
-    echo "handoff: sessions carried from pid $OLD to $(systemctl show -p MainPID --value proxyd)"
-  else
-    NEW=$(systemctl show -p MainPID --value proxyd)
-    if [ "$NEW" != 0 ] && [ "$(systemctl is-active proxyd)" = active ]; then
-      # Up after all, only late, and holding the sessions: leave it be.
-      echo "handoff: sessions carried from pid $OLD to $NEW, late"
+  up "$OLD" || true
+  NEW=$(systemctl show -p MainPID --value proxyd)
+  if [ "$NEW" = 0 ] || [ "$(systemctl is-active proxyd)" != active ]; then
+    # A new process lets go of the store only once it is ready, and systemd
+    # keeps the store for as long as it means to restart the unit, so the old
+    # binary can take it all back. A process that turns ready between the look
+    # above and the kill is lost with its sessions; three seconds late makes
+    # that rare.
+    echo "handoff: the new proxyd did not come up; putting the old one back"
+    if rollback "$NEW"; then
+      echo "handoff: rolled back; the previous binary carried the sessions"
     else
-      # A new process lets go of the store only once it is ready, and systemd
-      # keeps the store for as long as it means to restart the unit, so the old
-      # binary can take it all back: put it and its config in place, stop
-      # whatever is starting, start again. A process that turns ready between
-      # the check above and the kill below is lost with its sessions; three
-      # seconds late makes that rare.
-      echo "handoff: the new proxyd did not come up; putting the old one back"
-      restore
-      [ "$NEW" = 0 ] || $SUDO kill -KILL "$NEW" 2>/dev/null || true
-      $SUDO systemctl reset-failed proxyd 2>/dev/null || true
-      $SUDO systemctl start --no-block proxyd
-      if up "$NEW"; then
-        echo "handoff: rolled back; the previous binary carried the sessions"
-      else
-        echo "handoff: the previous binary did not come up either"
-      fi
-      $SUDO systemctl is-active proxyd || true
-      exit 1
+      echo "handoff: the previous binary did not come up either"
     fi
+    $SUDO systemctl is-active proxyd || true
+    exit 1
   fi
+  if ! stays "$NEW"; then
+    # Ready, so it had let go of the store, and the sessions went with it.
+    # Nothing here can be carried now, but the deploy goes no further, and
+    # the node goes back to the binary it was running.
+    echo "handoff: the new proxyd (pid $NEW) took over and then went, and its sessions with it; putting the old one back"
+    rollback "$(systemctl show -p MainPID --value proxyd)" ||
+      echo "handoff: the previous binary did not come up either"
+    $SUDO systemctl is-active proxyd || true
+    exit 1
+  fi
+  echo "handoff: sessions carried from pid $OLD to $NEW"
 else
   $SUDO mv -f @BIN@/proxyd.next @BIN@/proxyd
   $SUDO systemctl restart proxyd
