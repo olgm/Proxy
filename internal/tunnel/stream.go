@@ -230,8 +230,19 @@ func (d *dir) recv(p packet) {
 	// the originator probes its highest chunk blind when nothing is being
 	// acknowledged, and if the hop after us is the one that lost it, dropping the
 	// probe here would leave the exit's horizon short of the tail for ever.
+	//
+	// Below the watermark a re-send means the opposite: the far end has it, and
+	// the sender never heard so. We pass each watermark on once and drop the far
+	// end's repeats, so if that copy was lost nothing else will say it: we do.
 	if p.seq < d.acked {
+		ack := d.acked
 		d.mu.Unlock()
+		if p.flags&flagRtx != 0 {
+			plain := appendAck(nil, d.s.id, ack)
+			for _, l := range d.back {
+				d.s.sent.Add(uint64(l.send(plain, 1, false)))
+			}
+		}
 		return
 	}
 	if c, held := d.buf[p.seq]; held {

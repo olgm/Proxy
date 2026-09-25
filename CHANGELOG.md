@@ -38,6 +38,14 @@ code that is not deployed yet: the first bullets below.
   from the egress address, with the middle of an encrypted stream. A stream now
   opens on chunk 0; one whose start nobody can supply is reset when its repair
   window runs out.
+- **A relay repeats an ACK the sender missed.** A relay passes the far end's
+  "delivered through N" on once, when N moves, and drops the far end's repeats. If
+  that one copy was lost, the sender's probes were dropped at the relay too, being
+  below N, and after eight of them the sender reset a stream the far end had read
+  to the end. The relay now answers a re-sent chunk below N with N. Only a route
+  whose entry reaches the exit through nothing but relays could lose a session this
+  way, and only when that direction then went quiet for several seconds; the
+  tunnel tests hit it in about one run in a hundred.
 - **Every session records the player's own leg.** The entry reads the client
   connection's `TCP_INFO` every five seconds and once more as it ends: the lowest
   round trip the kernel saw, the median, p90 and worst of its smoothed round trip,

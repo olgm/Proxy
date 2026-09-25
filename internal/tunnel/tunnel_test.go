@@ -340,6 +340,57 @@ func TestTailLossBehindARelayIsRepairedByTheProbe(t *testing.T) {
 	}
 }
 
+// A relay passes an ACK on once, when the watermark moves, so the exit's repeats
+// stop there. When that one copy is lost on the way to the entry, the entry probes
+// for a chunk the exit has already read, and the relay is the only node that can
+// answer it. Unanswered, the entry gives up on a stream nothing is wrong with.
+func TestAckLostBehindARelayIsRepeatedByTheRelay(t *testing.T) {
+	k1, k2 := NewKey(), NewKey()
+	exit := mustNode(t, Options{Name: "exit", Bind: local("0"),
+		Peers: []LinkConfig{{Addr: "127.0.0.1", Key: k2}}})
+	relay := mustNode(t, Options{Name: "relay", Bind: local("0"),
+		Peers: []LinkConfig{{Addr: "127.0.0.1", Key: k1}},
+		Hops:  []LinkConfig{{Addr: exit.Addr().String(), Key: k2}}})
+	// An ACK is the size of a HEAD, and no HEAD goes toward the entry here: the exit
+	// sends nothing back. Lose the second ACK; the first gives the entry a round
+	// trip, so it probes on the short clock.
+	var acks atomic.Int32
+	w := newTappedWire(t, relay.Addr(), func(toRight bool, size int) bool {
+		return !toRight && size == headSize && acks.Add(1) == 2
+	})
+	entry := mustNode(t, Options{Name: "entry",
+		Hops: []LinkConfig{{Addr: w.String(), Key: k1}}})
+
+	s, err := entry.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	acked := func() uint64 {
+		s.down.mu.Lock()
+		defer s.down.mu.Unlock()
+		return s.down.acked
+	}
+	if _, err := s.Write([]byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	es, err := exit.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := startReader(es, nil)
+	waitFor(t, "the first ACK", func() bool { return acked() == 1 })
+
+	if _, err := s.Write([]byte("b")); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the exit to read the second chunk", func() bool { return r.len() == 2 })
+	waitFor(t, "the lost ACK to be repeated", func() bool { return acked() == 2 })
+	if _, err := s.Write([]byte("c")); err != nil {
+		t.Fatalf("write after the lost ACK: %v", err)
+	}
+	waitFor(t, "the exit to read the third chunk", func() bool { return r.len() == 3 })
+}
+
 // Racing: two paths into one exit. Whether the second one works, half works or
 // is a black hole, the stream arrives in order and exactly once — the exit keeps
 // the first copy of each chunk and drops the rest.

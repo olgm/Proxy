@@ -75,7 +75,9 @@ Notes for agents working on this repo.
   one copy of each chunk, then sends on with the next leg's own count, so counts
   never compound. A re-send is flagged on the wire and is not a copy: a relay must
   pass one on even when it holds the chunk, or a tail lost on the leg after it can
-  never be found. Ordering is restored only at the exit; do not add it to a relay.
+  never be found. One below its watermark it answers with the watermark instead: a
+  relay passes each ACK on once, so it is the only node left that can repeat it.
+  Ordering is restored only at the exit; do not add it to a relay.
 - Chunk numbers are the only identity in the tunnel. Duplicates carry the same number
   on purpose — that is what makes a copy distinguishable from a gap — so nothing may
   renumber a chunk as it passes through.
