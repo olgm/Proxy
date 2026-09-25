@@ -149,18 +149,22 @@ func TestSwapRestartsWhatCannotHandOff(t *testing.T) {
 
 // The unit is what makes a handoff possible at all: systemd has to wait for
 // READY, keep descriptors, keep them through a failure, restart at once, and
-// let proxyd reach its notify socket.
+// let proxyd reach its notify socket. And a start that fails has to fail its
+// job, or whatever waits on that job waits for ever.
 func TestUnitAllowsAHandoff(t *testing.T) {
 	script := installScript("proxyd", true, false, false, "")
 	for _, want := range []string{
 		"Type=notify", "NotifyAccess=main", "FileDescriptorStoreMax=8192",
-		"FileDescriptorStorePreserve=yes", "RestartMode=direct", "RestartSec=100ms",
+		"FileDescriptorStorePreserve=yes", "RestartSec=100ms",
 		"StartLimitIntervalSec=0",
 		"RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX",
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("unit lacks %s", want)
 		}
+	}
+	if strings.Contains(script, "RestartMode=direct") {
+		t.Error("RestartMode=direct holds every start job open through a crash loop")
 	}
 	if out, err := exec.Command("bash", "-n", "-c", script).CombinedOutput(); err != nil {
 		t.Fatalf("install script does not parse: %v\n%s", err, out)

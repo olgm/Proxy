@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -43,7 +44,7 @@ func TestDeployUnderRealSystemd(t *testing.T) {
 	t.Cleanup(func() {
 		exec.Command("bash", "-c", `sudo -n systemctl disable --now proxyd; sudo -n rm -f /etc/systemd/system/proxyd.service; sudo -n systemctl daemon-reload`).Run()
 	})
-	install := func(binary string) string {
+	install := func(binary string) (string, error) {
 		t.Helper()
 		if err := copyFile(binary, "/tmp/proxyd.new"); err != nil {
 			t.Fatal(err)
@@ -51,9 +52,14 @@ func TestDeployUnderRealSystemd(t *testing.T) {
 		if err := os.WriteFile("/tmp/proxyd.config.json", b, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		out, _ := exec.Command("bash", "-c", installScript("proxyd", false, false, false, "")).CombinedOutput()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, "bash", "-c", installScript("proxyd", false, false, false, "")).CombinedOutput()
 		t.Logf("install:\n%s", out)
-		return string(out)
+		if ctx.Err() != nil {
+			t.Fatalf("the install script was still running after a minute")
+		}
+		return string(out), err
 	}
 
 	// The first install is a restart: nothing was running that could hand off.
@@ -91,7 +97,7 @@ func TestDeployUnderRealSystemd(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}()
-	out := install(bin)
+	out, _ := install(bin)
 	close(stop)
 	pause := <-longest
 	select {
@@ -110,12 +116,21 @@ func TestDeployUnderRealSystemd(t *testing.T) {
 
 	broken := t.TempDir() + "/broken"
 	os.WriteFile(broken, []byte("#!/bin/sh\nexit 1\n"), 0o755)
-	if out := install(broken); !strings.Contains(out, "rolled back; the previous binary carried the sessions") {
+	if out, _ := install(broken); !strings.Contains(out, "rolled back; the previous binary carried the sessions") {
 		t.Fatalf("a binary that cannot start was not rolled back")
 	}
 	echoes(t, c, "third")
 	if got := statusText(); got != "handoff ready" {
 		t.Fatalf("after the rollback the status is %q", got)
+	}
+
+	// A deploy that has to restart onto a binary that cannot start fails, rather
+	// than waiting on a start job the restarts keep open for ever.
+	if err := exec.Command("sudo", "-n", "systemctl", "stop", "proxyd").Run(); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := install(broken); err == nil {
+		t.Fatalf("a restart onto a binary that cannot start did not fail the deploy:\n%s", out)
 	}
 	journal, _ := exec.Command("journalctl", "-u", "proxyd", "--no-pager", "-o", "cat").CombinedOutput()
 	t.Logf("journal:\n%s", journal)

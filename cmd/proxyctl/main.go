@@ -1446,7 +1446,6 @@ User=%s
 EnvironmentFile=-/etc/proxyd/feeds.env
 ExecStart=/usr/local/bin/proxyd -c /etc/proxyd/config.json
 Restart=always
-RestartMode=direct
 RestartSec=100ms
 FileDescriptorStoreMax=8192
 FileDescriptorStorePreserve=yes
@@ -1483,6 +1482,14 @@ $SUDO systemctl enable proxyd >/dev/null 2>&1
 // is off so that a short RestartSec cannot turn a crash loop into a unit that
 // stays failed. A start asked for by hand would not help: systemd holds a unit
 // waiting out RestartSec as activating, and a start just waits with it.
+//
+// The unit restarts the ordinary way, through a failed state, and not with
+// RestartMode=direct. Direct keeps a unit that fails before READY activating
+// through every restart, so no start job for it ever finishes: a deploy's
+// systemctl restart waited for ever on a binary that could not start, and
+// proxybot, ordered after proxyd, never started beside a crash loop. The failed
+// state in between is one systemd knows it will restart from, and the fd store
+// is kept through it.
 func swapScript(bin, etc string) string {
 	return strings.NewReplacer("@BIN@", bin, "@ETC@", etc).Replace(`
 # gone OLD: OLD is no longer the main process. up OLD: another one is, and has

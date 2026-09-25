@@ -77,7 +77,10 @@ handoff: sessions carried from pid 41822 to 41907
 systemd starts the new process 100 ms after the old one exits. So that a delay
 that short cannot turn a crash loop into a unit that stays failed, the unit has no
 start limit: a binary that cannot start is retried ten times a second until
-someone intervenes, where it used to be every two seconds. If the new process is
+someone intervenes, where it used to be every two seconds. Each of those starts
+fails the way any failed start does, so a `systemctl restart` of such a binary
+returns an error rather than waiting, and nothing ordered after `proxyd` waits on
+it either. If the new process is
 not up within three seconds of the old one leaving, the script puts the old
 binary and the old `config.json` back, kills whatever is starting, and starts
 again: the old binary takes the same store back, which it can because the new one
@@ -104,7 +107,7 @@ the old binary and config put back.
 that prints only `active` is running a `proxyd` from before this, or was started
 without the fd store; the next deploy restarts it, disconnecting everyone on it one
 last time, and every deploy after that is a handoff. The unit needs systemd 254 or
-newer for `FileDescriptorStorePreserve=` and `RestartMode=`; every node runs 255 or
+newer for `FileDescriptorStorePreserve=`; every node runs 255 or
 259.
 
 What does not carry over:
