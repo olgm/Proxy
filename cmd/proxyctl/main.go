@@ -390,8 +390,11 @@ func usage() {
 	fmt.Fprint(os.Stderr, `usage: proxyctl <command> [-f topology.json] [-C repo]
 
   config     print the per-node configs this topology expands to, change nothing
-  deploy     build, upload and start proxyd on every node
-  status     report each node's service state, listening sockets and tunnel links
+  deploy     build, upload and start proxyd on every node; a running proxyd
+             that says "handoff ready" hands its sessions to the new one
+             instead of being restarted
+  status     report each node's service state, whether it can hand off,
+             listening sockets and tunnel links
   uninstall  stop and remove the service, binary and config (leaves the account
              and the whitelist)
   version    print the version every binary here ships under
@@ -1382,6 +1385,15 @@ func lastLines(b []byte, n int) string {
 
 // installScript is intentionally idempotent: deploy is the only verb, and running
 // it twice must be safe.
+//
+// It replaces a running proxyd without dropping anyone when it can. A proxyd that
+// says "handoff ready" was started with an fd store and knows how to use it, so
+// the new binary goes in and the old process gets SIGUSR2: it hands every socket
+// and session to systemd and exits, and the new one carries on from them. If the
+// new one is not up within three seconds the old binary goes back and takes the
+// same store, which it can, because the new one never let go of it. Anything
+// older is restarted, which ends every session — the first deploy onto this
+// model is the last one that does.
 func installScript(user string, root, whitelist, motd bool, feeds string) string {
 	sudo := "sudo -n"
 	if root {
@@ -1411,7 +1423,7 @@ NOLOGIN=$(command -v nologin || echo /bin/false)
 id -u "$USER" >/dev/null 2>&1 || \
   $SUDO useradd --system --no-create-home --shell "$NOLOGIN" "$USER"
 
-$SUDO install -m 0755 /tmp/proxyd.new /usr/local/bin/proxyd
+$SUDO install -m 0755 /tmp/proxyd.new /usr/local/bin/proxyd.next
 $SUDO install -d -m 0755 /etc/proxyd
 $SUDO install -m 0640 -o root -g "$USER" /tmp/proxyd.config.json /etc/proxyd/config.json
 $SUDO install -d -m 0750 -o "$USER" -g "$USER" %s
@@ -1426,11 +1438,16 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+Type=notify
+NotifyAccess=main
 User=%s
 EnvironmentFile=-/etc/proxyd/feeds.env
 ExecStart=/usr/local/bin/proxyd -c /etc/proxyd/config.json
 Restart=always
-RestartSec=2
+RestartMode=direct
+RestartSec=100ms
+FileDescriptorStoreMax=8192
+FileDescriptorStorePreserve=yes
 TimeoutStopSec=15
 StateDirectory=proxyd
 NoNewPrivileges=true
@@ -1440,7 +1457,7 @@ PrivateTmp=true
 PrivateDevices=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
-RestrictAddressFamilies=AF_INET AF_INET6
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 LimitNOFILE=65535
 
 [Install]
@@ -1449,10 +1466,70 @@ UNIT
 
 $SUDO systemctl daemon-reload
 $SUDO systemctl enable proxyd >/dev/null 2>&1
-$SUDO systemctl restart proxyd
-sleep 1
-$SUDO systemctl is-active proxyd
-`, sudo, user, whitelistDir, seed, envFile("/etc/proxyd/feeds.env", `"$USER"`, feeds), user)
+
+%s$SUDO systemctl is-active proxyd
+`, sudo, user, whitelistDir, seed, envFile("/etc/proxyd/feeds.env", `"$USER"`, feeds), user, swapScript("/usr/local/bin"))
+}
+
+// swapScript puts proxyd.next in bin in place of the running proxyd: by handoff
+// where the running one says it can take part in one, by restart where it
+// cannot. It exits 1 if a handoff fails, after putting the old binary back.
+func swapScript(bin string) string {
+	return strings.ReplaceAll(`
+# up OLD: a process other than OLD is the main one and has said it is ready,
+# which under Type=notify is what "active" means.
+up() {
+  for _ in $(seq 1 30); do
+    PID=$(systemctl show -p MainPID --value proxyd)
+    if [ "$PID" != "$1" ] && [ "$PID" != 0 ] && [ "$(systemctl is-active proxyd)" = active ]; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
+OLD=$(systemctl show -p MainPID --value proxyd 2>/dev/null || echo 0)
+if [ "$(systemctl is-active proxyd 2>/dev/null)" = active ] &&
+   [ "$(systemctl show -p StatusText --value proxyd 2>/dev/null)" = "handoff ready" ]; then
+  $SUDO cp -p @BIN@/proxyd @BIN@/proxyd.prev
+  $SUDO mv -f @BIN@/proxyd.next @BIN@/proxyd
+  $SUDO kill -USR2 "$OLD"
+  if up "$OLD"; then
+    echo "handoff: sessions carried from pid $OLD to $(systemctl show -p MainPID --value proxyd)"
+  else
+    NEW=$(systemctl show -p MainPID --value proxyd)
+    if [ "$NEW" != "$OLD" ] && [ "$NEW" != 0 ] && [ "$(systemctl is-active proxyd)" = active ]; then
+      # Up after all, only late, and holding the sessions: leave it be.
+      echo "handoff: sessions carried from pid $OLD to $NEW, late"
+    elif [ "$NEW" = "$OLD" ]; then
+      $SUDO mv -f @BIN@/proxyd.prev @BIN@/proxyd
+      echo "handoff: the old proxyd never handed off, and is still running"
+      exit 1
+    else
+      # A new process lets go of the store only once it is ready, and the unit
+      # keeps the store even through a failed state, so the old binary can take
+      # it all back: put it in place, stop whatever is starting, start again.
+      echo "handoff: the new proxyd did not come up; putting the old one back"
+      $SUDO mv -f @BIN@/proxyd.prev @BIN@/proxyd
+      [ "$NEW" = 0 ] || $SUDO kill -KILL "$NEW" 2>/dev/null || true
+      $SUDO systemctl reset-failed proxyd 2>/dev/null || true
+      $SUDO systemctl start --no-block proxyd
+      if up "$NEW"; then
+        echo "handoff: rolled back; the previous binary carried the sessions"
+      else
+        echo "handoff: the previous binary did not come up either"
+      fi
+      $SUDO systemctl is-active proxyd || true
+      exit 1
+    fi
+  fi
+else
+  $SUDO mv -f @BIN@/proxyd.next @BIN@/proxyd
+  $SUDO systemctl restart proxyd
+  sleep 1
+fi
+`, "@BIN@", bin)
 }
 
 // envFile writes a service's feed variables, or removes the file when there are
@@ -1554,7 +1631,7 @@ func status(t *Topology) error {
 		// A restart clears the set: proxyd logs its listeners first, so links that
 		// only existed under an older config do not linger in the report.
 		out, _ := ssh(node.SSH, versionLine("proxyd")+`
-systemctl is-active proxyd 2>&1 || true
+echo "$(systemctl is-active proxyd 2>&1) $(systemctl show -p StatusText --value proxyd 2>/dev/null)"
 ss -lntup 2>/dev/null | grep proxyd || echo "  (no listening sockets)"
 journalctl -u proxyd -n 400 --no-pager -o cat 2>/dev/null |
   awk '/ listen /{delete last}
@@ -1668,7 +1745,7 @@ $SUDO rm -f /etc/systemd/system/proxybot.service /usr/local/bin/proxybot /etc/pr
 		out, err := ssh(node.SSH, fmt.Sprintf(`set -u
 SUDO="%s"
 $SUDO systemctl disable --now proxyd >/dev/null 2>&1 || true
-$SUDO rm -f /etc/systemd/system/proxyd.service /usr/local/bin/proxyd /etc/proxyd/config.json
+$SUDO rm -f /etc/systemd/system/proxyd.service /usr/local/bin/proxyd /usr/local/bin/proxyd.prev /usr/local/bin/proxyd.next /etc/proxyd/config.json
 %s
 %s
 $SUDO rmdir /etc/proxyd 2>/dev/null || true
