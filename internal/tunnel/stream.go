@@ -245,8 +245,9 @@ func (d *dir) recv(p packet) {
 	// probe here would leave the exit's horizon short of the tail for ever.
 	//
 	// Below the watermark a re-send means the opposite: the far end has it, and
-	// the sender never heard so. We pass each watermark on once and drop the far
-	// end's repeats, so if that copy was lost nothing else will say it: we do.
+	// the sender had not heard so when it sent. We pass each watermark on once and
+	// drop the far end's repeats, so if that copy was lost nothing else will say
+	// it: we do.
 	if p.seq < d.acked {
 		ack := d.acked
 		d.mu.Unlock()

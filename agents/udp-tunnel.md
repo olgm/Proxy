@@ -59,10 +59,12 @@ a link, and a counter also gives the replay window something to work with.
   frees its buffers. Never make it end-to-end-only.
 - **A relay passes each watermark on once, so it answers for it.** The far end
   repeats its ACK every `ack_repeat_ms`, but a relay forwards one only when it
-  moves. A re-send below the relay's watermark means the copy it forwarded was
-  lost, and the relay answers it with an ACK of the watermark. Dropped like any
-  other copy, the sender's probes go unanswered until it gives up on a stream the
-  far end has read to the end.
+  moves. A re-send below the relay's watermark means the sender had not heard it
+  when it sent: most often the copy the relay forwarded was lost, though a probe
+  can also cross the ACK in flight. Either way the relay answers it with an ACK of
+  the watermark; a spare one is harmless. Dropped like any other copy, the
+  sender's probes go unanswered until it gives up on a stream the far end has read
+  to the end.
 - **A NACK for a chunk we never held becomes our own want.** That is the whole
   chained repair; without it the far end asks a node that cannot answer, forever.
 
