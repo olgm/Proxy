@@ -1437,6 +1437,7 @@ $SUDO tee /etc/systemd/system/proxyd.service >/dev/null <<'UNIT'
 Description=proxyd
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=notify
@@ -1446,7 +1447,7 @@ EnvironmentFile=-/etc/proxyd/feeds.env
 ExecStart=/usr/local/bin/proxyd -c /etc/proxyd/config.json
 Restart=always
 RestartMode=direct
-RestartSec=2
+RestartSec=100ms
 FileDescriptorStoreMax=8192
 FileDescriptorStorePreserve=yes
 TimeoutStopSec=15
@@ -1477,9 +1478,11 @@ $SUDO systemctl enable proxyd >/dev/null 2>&1
 // cannot. It exits 1 if a handoff fails, after putting the old binary and the old
 // config in etc back.
 //
-// The new process is started by hand the moment the old one has gone, rather
-// than after the unit's RestartSec: that delay is for a crash loop, and a handoff
-// is a pause every player on the node sits through.
+// systemd starts the new process: the unit's RestartSec is short because a
+// handoff is a pause every player on the node sits through, and its start limit
+// is off so that a short RestartSec cannot turn a crash loop into a unit that
+// stays failed. A start asked for by hand would not help: systemd holds a unit
+// waiting out RestartSec as activating, and a start just waits with it.
 func swapScript(bin, etc string) string {
 	return strings.NewReplacer("@BIN@", bin, "@ETC@", etc).Replace(`
 # gone OLD: OLD is no longer the main process. up OLD: another one is, and has
@@ -1519,7 +1522,6 @@ if [ "$(systemctl is-active proxyd 2>/dev/null)" = active ] &&
     echo "handoff: the old proxyd never handed off, and is still running"
     exit 1
   fi
-  $SUDO systemctl start --no-block proxyd
   if up "$OLD"; then
     echo "handoff: sessions carried from pid $OLD to $(systemctl show -p MainPID --value proxyd)"
   else

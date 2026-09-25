@@ -96,11 +96,9 @@ func TestSwapHandsOffToANewProcess(t *testing.T) {
 // back, and the old binary takes the store back. The deploy fails, so it goes no
 // further.
 func TestSwapRollsBackWhenTheNewProcessDoesNotComeUp(t *testing.T) {
-	// The first start is the one the script kicks off at once; the new binary
-	// never gets to ready. The second, after the rollback, is the old binary.
 	f := newFakeNode(t, "handoff ready",
 		`echo 101 > $D/pid; echo activating > $D/active`,
-		`if [ -f $D/kicked ]; then echo 102 > $D/pid; echo active > $D/active; else touch $D/kicked; fi`)
+		`echo 102 > $D/pid; echo active > $D/active`)
 	out, err := f.run(t)
 	if err == nil {
 		t.Fatalf("a failed handoff did not fail the deploy:\n%s", out)
@@ -133,17 +131,6 @@ func TestSwapLeavesAnOldProxydThatDidNotHandOff(t *testing.T) {
 	}
 }
 
-// The new process is started at once when the old one goes, not after the
-// unit's two-second crash-loop delay.
-func TestSwapStartsTheNewProcessAtOnce(t *testing.T) {
-	f := newFakeNode(t, "handoff ready", `echo 0 > $D/pid; echo activating > $D/active`,
-		`echo 101 > $D/pid; echo active > $D/active`)
-	out, err := f.run(t)
-	if err != nil || !strings.Contains(out, "sessions carried from pid 100 to 101") {
-		t.Fatalf("%v\n%s", err, out)
-	}
-}
-
 // A proxyd that cannot hand off — anything before this, or one started without
 // a store — is restarted, as every deploy used to do.
 func TestSwapRestartsWhatCannotHandOff(t *testing.T) {
@@ -167,7 +154,8 @@ func TestUnitAllowsAHandoff(t *testing.T) {
 	script := installScript("proxyd", true, false, false, "")
 	for _, want := range []string{
 		"Type=notify", "NotifyAccess=main", "FileDescriptorStoreMax=8192",
-		"FileDescriptorStorePreserve=yes", "RestartMode=direct", "RestartSec=2",
+		"FileDescriptorStorePreserve=yes", "RestartMode=direct", "RestartSec=100ms",
+		"StartLimitIntervalSec=0",
 		"RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX",
 	} {
 		if !strings.Contains(script, want) {

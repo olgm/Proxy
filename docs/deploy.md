@@ -74,9 +74,11 @@ The install step prints how it went:
 handoff: sessions carried from pid 41822 to 41907
 ```
 
-The script starts the new process itself the moment the old one has gone, rather
-than waiting out the unit's two-second `RestartSec`, which is there for a crash
-loop. If the new process is not up within three seconds, the script puts the old
+systemd starts the new process 100 ms after the old one exits. So that a delay
+that short cannot turn a crash loop into a unit that stays failed, the unit has no
+start limit: a binary that cannot start is retried ten times a second until
+someone intervenes, where it used to be every two seconds. If the new process is
+not up within three seconds of the old one leaving, the script puts the old
 binary and the old `config.json` back, kills whatever is starting, and starts
 again: the old binary takes the same store back, which it can because the new one
 lets go of it only once it is ready. The deploy then stops with an error rather

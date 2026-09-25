@@ -70,8 +70,7 @@ func TestDeployUnderRealSystemd(t *testing.T) {
 	echoes(t, c, "first")
 
 	// Echo one byte at a time through the handoff and keep the longest wait: that
-	// is the pause a player sits through. The unit's RestartSec is two seconds,
-	// so a pause under that says the script started the new process itself.
+	// is the pause a player sits through.
 	stop, longest, broke := make(chan struct{}), make(chan time.Duration, 1), make(chan error, 1)
 	go func() {
 		var worst time.Duration
