@@ -329,6 +329,13 @@ func (d *dir) holds(seq uint64) bool {
 	return ok
 }
 
+// unread reports whether a terminator has handed nothing to its reader yet.
+func (d *dir) unread() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.deliver == 0 && d.head == nil
+}
+
 // onAck frees everything the far end has already read, and reports whether the
 // watermark moved — a repeat carries no news and is not worth passing on.
 func (d *dir) onAck(through uint64) bool {

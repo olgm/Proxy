@@ -376,3 +376,44 @@ func (c *counter) load() int {
 	defer c.mu.Unlock()
 	return c.n
 }
+
+// A stream the exit was reading, which nobody above claims after the handoff, had
+// a connection to the backend that is gone now. It must not be offered again —
+// that would dial the backend for the rest of it — and a stream that had ended
+// cleanly must not be reset either.
+func TestExitDoesNotOfferAgainWhatItWasReading(t *testing.T) {
+	l := newLine(t, nil)
+	s, err := l.entry.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Write([]byte("hello"))
+	s.CloseWrite()
+	es, err := l.exit.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, err := io.ReadAll(es); err != nil || string(b) != "hello" {
+		t.Fatalf("read %q, %v", b, err)
+	}
+	es.CloseWrite()
+	es.Halt()
+	es.Close() // does nothing: halted, as a relay finishing during a handoff is
+
+	l.exit = takeOver(t, l.exit, l.exitOpt)
+	offered := make(chan *Stream, 1)
+	go func() {
+		if st, err := l.exit.Accept(); err == nil {
+			offered <- st
+		}
+	}()
+	select {
+	case <-offered:
+		t.Fatal("a stream the exit had already read was offered again")
+	case <-time.After(500 * time.Millisecond):
+	}
+	// The entry's read side sees the clean end, not a reset.
+	if b, err := io.ReadAll(s); err != nil || len(b) != 0 {
+		t.Fatalf("the entry read %q, %v; want a clean end", b, err)
+	}
+}

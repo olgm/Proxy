@@ -235,7 +235,12 @@ func (n *Node) resume(r *Resume) {
 }
 
 // settle deals with the streams nobody above claimed, once the node is running
-// and can send.
+// and can send. At the entry nothing is left to write one, so it is closed. At the
+// exit one that nothing ever read was frozen before anyone dialled for it, and is
+// offered again; one that something did read had a relay, which ended or was lost
+// in the handoff, and offering it would dial the backend for the rest of a stream
+// that already had a connection. That one is closed too — reset, unless it had
+// already reached its end.
 func (n *Node) settle(attached map[uint64]bool) {
 	for _, s := range n.live() {
 		if attached[s.id] || s.gone() {
@@ -244,8 +249,12 @@ func (n *Node) settle(attached map[uint64]bool) {
 		switch {
 		case len(n.up) == 0:
 			s.Close()
-		case len(n.down) == 0 && s.rx.holds(0):
-			n.offer(s)
+		case len(n.down) == 0 && s.rx.unread():
+			if s.rx.holds(0) {
+				n.offer(s)
+			}
+		case len(n.down) == 0:
+			s.Close()
 		}
 	}
 }
