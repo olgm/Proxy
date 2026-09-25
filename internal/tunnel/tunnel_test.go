@@ -603,6 +603,11 @@ func TestAnOutageShorterThanTheRepairWindowIsRiddenOut(t *testing.T) {
 		return s.down.acked == 1
 	})
 
+	// Sit idle past the window first. The wait counts from the send that ends the
+	// idle, not from the last ACK, or a stream that went quiet for a while would
+	// die in the first outage it met.
+	time.Sleep(repair + 200*time.Millisecond)
+
 	cut.Store(true)
 	if _, err := s.Write([]byte("b")); err != nil {
 		t.Fatal(err)
