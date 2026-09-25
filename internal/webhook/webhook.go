@@ -346,9 +346,9 @@ func (q *Queue) Close() {
 
 // Detach stops the queue without posting and returns, in order, every line it
 // had not posted yet, for a process that carries on from this one to Send. It
-// waits at most d: a post already on its way to Discord is left to finish on its
-// own, and what was gathered behind it goes with the process. Nil if nothing was
-// waiting, or if the wait ran out.
+// waits at most d for the sender: a post already on its way to Discord is left
+// to finish on its own, and the lines queued behind it are taken here instead.
+// Nil if nothing was waiting.
 func (q *Queue) Detach(d time.Duration) []string {
 	q.once.Do(func() {
 		q.mu.Lock()
@@ -360,7 +360,21 @@ func (q *Queue) Detach(d time.Duration) []string {
 	case <-q.done:
 		return q.left
 	case <-time.After(d):
-		return nil
+	}
+	// Send is shut out, so what is queued now is all there will be, and the
+	// sender, still posting, takes none of it unless it finishes this instant.
+	var left []string
+	for {
+		select {
+		case line := <-q.in:
+			left = append(left, line)
+			continue
+		default:
+		}
+		if n := q.drops.Swap(0); n > 0 {
+			left = append(left, fmt.Sprintf("_...and %d more that did not fit_", n))
+		}
+		return left
 	}
 }
 

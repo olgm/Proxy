@@ -306,3 +306,25 @@ func TestAFillingQueuePostsBeforeItOverflows(t *testing.T) {
 		t.Errorf("%d lines were dropped by a queue that had room to post", q.drops.Load())
 	}
 }
+
+// A handoff that lands while a post is on its way to Discord does not wait for
+// it, but it still takes what was queued behind it: those lines are not in that
+// post, and once the process has gone nothing else would send them.
+func TestDetachDuringAPostHandsBackWhatWaitedBehindIt(t *testing.T) {
+	c, url := newCapture(t)
+	c.hold = make(chan struct{})
+	defer close(c.hold)
+	q := NewQueue(url, 16, 10*time.Millisecond)
+	q.Send("first")
+	deadline := time.Now().Add(5 * time.Second)
+	for len(c.sent()) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("nothing was posted")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	q.Send("second")
+	if left := q.Detach(50 * time.Millisecond); strings.Join(left, ",") != "second" {
+		t.Fatalf("handed back %q, want the line queued behind the post", left)
+	}
+}
