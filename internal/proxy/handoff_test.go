@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -681,5 +682,49 @@ func TestAStoppedRelayCountsPastTheDeadline(t *testing.T) {
 	}
 	if stopped(make(chan struct{}), past) {
 		t.Fatal("a relay that never stopped was taken for one that had")
+	}
+}
+
+// A handoff can come the moment a node is ready: a second deploy, or a signal
+// that was already waiting. It carries every relay the node took over, whether
+// or not the goroutine relaying it has run yet.
+func TestHandoffStraightAfterATakeoverCarriesEveryRelay(t *testing.T) {
+	useMojang(t, nil)
+	backend, dials := echoBackend(t)
+	cfg := &Config{Name: "ch", Listeners: []Listener{{Bind: "127.0.0.1:0", Upstream: backend,
+		Minecraft: &Minecraft{RewriteHost: "mc.example.com", RewritePort: 25565}}}}
+	n := mustStart(t, cfg)
+	p := play(t, n.lns[0].Addr().String())
+	p.flowing(t)
+	first := newFDStore(t)
+	if err := n.handoff(first.keep); err != nil {
+		t.Fatal(err)
+	}
+	next, resumes, err := build(cfg, first.start())
+	if err != nil {
+		t.Fatal(err)
+	}
+	next.serve(resumes)
+	second := newFDStore(t)
+	if err := next.handoff(second.keep); err != nil {
+		t.Fatal(err)
+	}
+	var snap snapshot
+	if err := json.Unmarshal(second.snap, &snap); err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Relays) != 1 {
+		t.Fatalf("the second handoff carried %d relays, want 1", len(snap.Relays))
+	}
+	last, resumes, err := build(cfg, second.start())
+	if err != nil {
+		t.Fatal(err)
+	}
+	last.serve(resumes)
+	defer last.close()
+	p.flowing(t)
+	p.finish(t)
+	if got := dials.Load(); got != 1 {
+		t.Fatalf("the backend was dialled %d times, want once", got)
 	}
 }

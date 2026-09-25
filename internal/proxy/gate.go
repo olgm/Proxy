@@ -74,7 +74,8 @@ func (g *gate) start(a *admission, r *relayer, k *carry) bool {
 	return true
 }
 
-// adopt registers a relay a handoff carried in, which was admitted long ago.
+// adopt registers a relay a handoff carried in, which was admitted long ago. It
+// is called before the node is ready, while nothing can be freezing the gate.
 func (g *gate) adopt(r *relayer, k *carry) {
 	g.mu.Lock()
 	g.relays[r] = k

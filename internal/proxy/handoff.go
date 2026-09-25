@@ -577,6 +577,9 @@ func (in *inherited) end(s *server, e endState) halfCloser {
 // resume is what starts one carried relay again, of whichever kind it was.
 func (s *server) resume(rs relayState, r *relayer) func() {
 	k := &carry{bind: s.Bind, net: s.Network(), start: rs.Start}
+	// Now, not in the goroutine below: a handoff that comes the moment this
+	// node is ready has to find every relay, whether it has started or not.
+	s.gate.adopt(r, k)
 	switch {
 	case rs.Session != nil:
 		c := r.a.(*net.TCPConn)
@@ -587,7 +590,6 @@ func (s *server) resume(rs relayState, r *relayer) func() {
 		return func() {
 			defer r.a.Close()
 			defer r.b.Close()
-			s.gate.adopt(r, k)
 			s.countMu.Lock()
 			sess.Online = s.online.Add(1)
 			id := s.live.add(sess, func() { r.a.Close(); r.b.Close() })
@@ -601,14 +603,12 @@ func (s *server) resume(rs relayState, r *relayer) func() {
 		return func() {
 			defer r.a.Close()
 			defer r.b.Close()
-			s.gate.adopt(r, k)
 			s.finishStream(st, r, k.start)
 		}
 	default:
 		return func() {
 			defer r.a.Close()
 			defer r.b.Close()
-			s.gate.adopt(r, k)
 			s.finishPlain(r)
 		}
 	}
