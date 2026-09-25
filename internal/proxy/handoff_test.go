@@ -668,3 +668,18 @@ func TestASessionWithNoListenerLeftIsWrittenDownOnce(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// A relay that stopped in time counts as stopped however late it is looked at.
+func TestAStoppedRelayCountsPastTheDeadline(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	past := time.Now().Add(-time.Second)
+	for i := range 1000 {
+		if !stopped(done, past) {
+			t.Fatalf("a relay that had stopped was taken for one that had not, on look %d", i)
+		}
+	}
+	if stopped(make(chan struct{}), past) {
+		t.Fatal("a relay that never stopped was taken for one that had")
+	}
+}

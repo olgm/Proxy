@@ -144,9 +144,7 @@ func (n *node) handoff(keep func([]byte, []handoff.File) error) error {
 	var sessions int64
 	deadline := time.Now().Add(haltWait)
 	for r, k := range relays {
-		select {
-		case <-r.done:
-		case <-time.After(time.Until(deadline)):
+		if !stopped(r.done, deadline) {
 			log.Printf("handoff: a relay on %s did not stop; its session ends here", k.bind)
 			continue
 		}
@@ -199,6 +197,26 @@ func (n *node) handoff(keep func([]byte, []handoff.File) error) error {
 	}
 	log.Printf("handoff: %d relay(s) and %d listener(s) handed on", len(snap.Relays), len(snap.Listeners))
 	return nil
+}
+
+// stopped waits until done is closed or the deadline passes, and reports whether
+// done was. It looks first: past the deadline both would be ready, and a select
+// picks either, so one relay that overran would make about half of those checked
+// after it look as if they had not stopped either.
+func stopped(done <-chan struct{}, deadline time.Time) bool {
+	select {
+	case <-done:
+		return true
+	default:
+	}
+	t := time.NewTimer(time.Until(deadline))
+	defer t.Stop()
+	select {
+	case <-done:
+		return true
+	case <-t.C:
+		return false
+	}
 }
 
 // release lets go of everything once it is safe elsewhere. It closes this
