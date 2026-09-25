@@ -31,9 +31,10 @@ type Resume struct {
 	Sockets
 	State State
 	// Attached are the streams the layer above is carrying on with, and will
-	// claim with Adopt. At the exit the others are offered to Accept again, so
-	// a stream frozen before anyone dialled for it is dialled now. At the entry
-	// they are reset: nothing is left to write them.
+	// claim with Adopt. At the exit, of the others, one nothing ever read was
+	// frozen before anyone dialled for it, and is offered to Accept again; the
+	// rest had a relay, and are closed. At the entry they are reset: nothing is
+	// left to write them. See settle.
 	Attached map[uint64]bool
 }
 

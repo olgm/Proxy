@@ -149,9 +149,15 @@ never sent is found by the HEAD advert the new one sends at once, and by NACKs.
   freeze having stopped every sender first. Peers already treat a new epoch as a
   restart.
 - **Streams nobody claims are settled, not dropped.** `Resume.Attached` names the
-  streams the layer above carries on with. At the exit the rest are offered to
-  `Accept` again — they were frozen before anyone dialled — and at the entry they
-  are reset, since nothing is left to write them.
+  streams the layer above carries on with. At the exit, one of the rest that
+  nothing ever read was frozen before anyone dialled, and is offered to `Accept`
+  again. One that something did read had a relay, which ended or was lost in the
+  handoff: offering it would dial the backend for the tail of a stream, so it is
+  closed, and reset unless it had reached its end. At the entry they are all
+  reset, since nothing is left to write them.
+- **Only the exit offers.** The entry opens its own streams and nothing there
+  reads `Accept`, so a reply arriving on one must never queue it: 64 of them fill
+  the backlog, and `offer` then drops the live stream from the node.
 
 ## Testing
 
