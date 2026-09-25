@@ -762,3 +762,49 @@ func TestExitOpensAStreamWhoseStartArrivesLate(t *testing.T) {
 		t.Fatal("the stream never opened")
 	}
 }
+
+// The entry opens its streams itself and nothing there reads Accept, so a reply
+// arriving on one must never queue it to be offered. When it did, the 65th login
+// found the backlog full, and the stream it was using was dropped from the node
+// the moment the backend first answered: everything after that was discarded.
+func TestEntryDoesNotOfferItsOwnStreams(t *testing.T) {
+	k := NewKey()
+	exit := mustNode(t, Options{Name: "exit", Bind: local("0"),
+		Peers: []LinkConfig{{Addr: "127.0.0.1", Key: k}}})
+	entry := mustNode(t, Options{Name: "entry",
+		Hops: []LinkConfig{{Addr: exit.Addr().String(), Key: k}}})
+	go func() {
+		for {
+			s, err := exit.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				io.Copy(s, s)
+				s.CloseWrite()
+			}()
+		}
+	}()
+	for i := range acceptBacklog + 6 {
+		s, err := entry.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.Write([]byte("ping"))
+		s.CloseWrite()
+		got := make(chan string, 1)
+		go func() {
+			b, _ := io.ReadAll(s)
+			got <- string(b)
+		}()
+		select {
+		case b := <-got:
+			if b != "ping" {
+				t.Fatalf("stream %d: read %q", i, b)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("stream %d never finished: its reply stopped arriving", i)
+		}
+		s.Close()
+	}
+}

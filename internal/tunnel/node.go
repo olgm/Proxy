@@ -416,7 +416,9 @@ func (n *Node) handle(l *Link, p packet, size int) {
 			return // closed, and kept only so a late NACK still finds an answer
 		}
 		data.recv(p)
-		if s.rx != nil && !s.offered.Load() && s.rx.holds(0) {
+		// Only the exit offers a stream. The entry opened its own, and nothing
+		// there reads Accept: queued, they would fill the backlog in 64 logins.
+		if len(n.down) == 0 && !s.offered.Load() && s.rx.holds(0) {
 			n.offer(s)
 		}
 	case msgHead:
