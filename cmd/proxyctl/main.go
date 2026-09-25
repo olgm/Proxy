@@ -1494,7 +1494,7 @@ func swapScript(bin, etc string) string {
 # gone OLD: OLD is no longer the main process. up OLD: another one is, and has
 # said it is ready, which under Type=notify is what "active" means.
 gone() {
-  for _ in $(seq 1 60); do
+  for _ in $(seq 1 200); do
     [ "$(systemctl show -p MainPID --value proxyd)" != "$1" ] && return 0
     sleep 0.1
   done
@@ -1521,8 +1521,12 @@ if [ "$(systemctl is-active proxyd 2>/dev/null)" = active ] &&
   $SUDO cp -p @BIN@/proxyd @BIN@/proxyd.prev
   $SUDO mv -f @BIN@/proxyd.next @BIN@/proxyd
   $SUDO kill -USR2 "$OLD"
-  # The old process lets logins under way finish first, up to two seconds of
-  # the six, and relays carry on meanwhile; only then does it hand off and go.
+  # The old process lets logins under way finish first, for up to two seconds
+  # while relays carry on, then halts them, for up to five more if one is slow,
+  # and waits for systemd to take the store, for up to five again. Twenty
+  # seconds is past all of that: one that has not gone by then is stuck, and
+  # putting the old files back beneath a handoff still under way would leave
+  # the node running the new binary with the old one on disk.
   if ! gone "$OLD"; then
     restore
     echo "handoff: the old proxyd never handed off, and is still running"

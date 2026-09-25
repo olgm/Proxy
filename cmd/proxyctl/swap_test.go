@@ -39,7 +39,13 @@ func newFakeNode(t *testing.T, status, onUSR2, onStart string) *fakeNode {
 D=`+dir+`
 echo "systemctl $*" >> $D/log
 case "$*" in
-  "show -p MainPID --value proxyd") cat $D/pid ;;
+  "show -p MainPID --value proxyd")
+    # A countdown, where a test set one, runs $D/then after that many looks.
+    if [ -f $D/countdown ]; then
+      n=$(cat $D/countdown)
+      if [ "$n" -le 0 ]; then rm $D/countdown; . $D/then; else echo $((n-1)) > $D/countdown; fi
+    fi
+    cat $D/pid ;;
   "show -p StatusText --value proxyd") cat $D/status ;;
   "is-active proxyd") cat $D/active; [ "$(cat $D/active)" = active ] ;;
   "start --no-block proxyd") `+onStart+` ;;
@@ -172,5 +178,24 @@ func TestUnitAllowsAHandoff(t *testing.T) {
 	}
 	if out, err := exec.Command("bash", "-n", "-c", script).CombinedOutput(); err != nil {
 		t.Fatalf("install script does not parse: %v\n%s", err, out)
+	}
+}
+
+// An old proxyd can take a while to go: two seconds for logins under way, up to
+// five for a relay that is slow to halt, and up to five for systemd to take the
+// store. A swap that stopped waiting after six took a handoff still under way
+// for one that never started, and put the old binary back beneath it.
+func TestSwapWaitsOutASlowHandoff(t *testing.T) {
+	f := newFakeNode(t, "handoff ready",
+		`echo 100 > $D/countdown; echo 'echo 101 > $D/pid; echo active > $D/active' > $D/then`, ":")
+	out, err := f.run(t)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out, "handoff: sessions carried from pid 100 to 101") {
+		t.Fatalf("output:\n%s", out)
+	}
+	if f.read(t, "bin/proxyd") != "new" || f.read(t, "etc/config.json") != "new config" {
+		t.Fatal("the new binary and config are not in place")
 	}
 }

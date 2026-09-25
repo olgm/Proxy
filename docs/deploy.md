@@ -100,8 +100,8 @@ that takes longer than that still keeps the players' TCP connections but loses t
 streams behind them, and those players reconnect. A new process that turns ready
 in the instant between the script's last look and its kill is killed with the
 sessions it had just taken; three seconds late makes that rare. An old process
-that takes the signal and does not go within six seconds is left running, with
-the old binary and config put back.
+that takes the signal and does not go within twenty seconds, well past the most
+its own limits allow, is left running, with the old binary and config put back.
 
 `proxyctl status` prints `active handoff ready` for a node that can hand off. One
 that prints only `active` is running a `proxyd` from before this, or was started
