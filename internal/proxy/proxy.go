@@ -222,6 +222,8 @@ type server struct {
 	// geo is what the node knows about its players' networks. Nil, and knowing
 	// nothing, unless the config turned lookups on.
 	geo *ipinfo.Client
+	// gate is the node's, and what a handoff closes. See gate.go.
+	gate *gate
 }
 
 // halfCloser is whatever the next leg turns out to be: a TCP connection on a
@@ -250,19 +252,41 @@ var newMojang = func() mojangAPI { return mojang.New() }
 // the node stops serving: a listener that dies takes the process with it, as it
 // always has, because systemd brings it back and a node relaying on half its
 // listeners is worse than one that is plainly down.
-func Run(cfg *Config, stop <-chan struct{}) error {
-	n, err := start(cfg)
+//
+// With h, it starts from whatever the last process handed on, and a signal on
+// h.Signal hands this one on in turn: Run returns once the next process has
+// everything, with every session still going. See handoff.go.
+func Run(cfg *Config, stop <-chan struct{}, h *Handoff) error {
+	var in *inherited
+	if h != nil {
+		in = readInherited(h.From)
+	}
+	n, resumes, err := build(cfg, in)
 	if err != nil {
 		return err
 	}
+	// Before anything moves a byte: until the last process's store is let go,
+	// a crash here restarts from the same snapshot, which is only safe while
+	// nothing it describes has changed.
+	if h != nil && h.Ready != nil {
+		h.Ready()
+	}
+	n.serve(resumes)
 	served := make(chan struct{})
 	go func() {
 		n.wg.Wait()
 		close(served)
 	}()
+	var hand <-chan struct{}
+	if h != nil && h.Keep != nil {
+		hand = h.Signal
+	}
 	select {
 	case <-stop:
 	case <-served:
+	case <-hand:
+		log.Printf("handing off")
+		return n.handoff(h.Keep)
 	}
 	n.close()
 	<-served
@@ -272,11 +296,17 @@ func Run(cfg *Config, stop <-chan struct{}) error {
 // node is a running config: its listeners, and the control link if it has one.
 type node struct {
 	wg      sync.WaitGroup
-	lns     []net.Listener
+	lns     []*net.TCPListener
+	byBind  map[string]*net.TCPListener
 	servers []*server
-	ctl     net.Listener
+	ctl     *net.TCPListener
+	ctlBind string
 	feed    *sessionFeed
 	live    *live
+	gate    *gate
+	// goes are the goroutines serve starts: every accept loop, the control
+	// link and the tunnels' streams.
+	goes []func()
 }
 
 // close shuts the node down in the order a session needs to survive it: stop
@@ -314,16 +344,46 @@ func (n *node) close() {
 }
 
 func start(cfg *Config) (*node, error) {
+	n, resumes, err := build(cfg, nil)
+	if err != nil {
+		return nil, err
+	}
+	n.serve(resumes)
+	return n, nil
+}
+
+// serve starts everything build set up, and every relay a handoff carried.
+func (n *node) serve(resumes []func()) {
+	for _, f := range n.goes {
+		n.wg.Add(1)
+		go func() {
+			defer n.wg.Done()
+			f()
+		}()
+	}
+	for _, f := range resumes {
+		go f()
+	}
+}
+
+// build sets up every listener without starting anything, from in where a
+// handoff left one, and returns what resumes each relay it carried.
+func build(cfg *Config, in *inherited) (*node, []func(), error) {
+	if in != nil {
+		// Whatever the config below has no use for ends here, as it would have
+		// in a plain restart.
+		defer in.from.Close()
+	}
 	if len(cfg.Listeners) == 0 {
-		return nil, errors.New("config defines no listeners")
+		return nil, nil, errors.New("config defines no listeners")
 	}
 	if cfg.Control != nil && !gated(cfg) {
-		return nil, errors.New("control: this node has no whitelist to manage")
+		return nil, nil, errors.New("control: this node has no whitelist to manage")
 	}
 	// One feed for the node, shared by every ingress on it. Off unless the
 	// environment holds a URL, which is how an operator turns it on.
 	feed := newSessionFeed(os.Getenv(EnvSessionsWebhook))
-	n := &node{feed: feed, live: newLive()}
+	n := &node{feed: feed, live: newLive(), gate: newGate(), byBind: map[string]*net.TCPListener{}}
 	// The record of finished sessions, on any node that sees a login. It holds
 	// what the journal line already holds, on the same machine and for the same
 	// operator, so it is not a new disclosure — but it is bounded, and a node
@@ -346,13 +406,12 @@ func start(cfg *Config) (*node, error) {
 	if cfg.IPInfo && gated(cfg) {
 		geo = ipinfo.New(ipinfo.DefaultURL)
 	}
-	var wg = &n.wg
 	for _, l := range cfg.Listeners {
-		s, err := newServer(l)
+		s, err := newServerFrom(l, in.tunnel(l.Bind))
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		s.node, s.feed, s.live, s.geo = cfg.Name, feed, n.live, geo
+		s.node, s.feed, s.live, s.geo, s.gate = cfg.Name, feed, n.live, geo, n.gate
 		n.servers = append(n.servers, s)
 		mode := l.Role()
 		if s.wl != nil {
@@ -370,40 +429,56 @@ func start(cfg *Config) (*node, error) {
 		}
 		log.Printf("listen %s %s -> %s [%s] %s", l.Network(), l.Bind, l.Next(), mode, guard)
 
-		wg.Add(1)
 		if l.Net == "udp" {
 			// The tunnel node is the listener: it bound its own socket when it was
 			// built, and hands us streams instead of connections.
-			go func() {
-				defer wg.Done()
-				s.serveTunnel()
-			}()
+			n.goes = append(n.goes, s.serveTunnel)
 			continue
 		}
-		ln, err := net.Listen("tcp", l.Bind)
+		ln, err := listenTCP(l.Bind, in)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		n.lns = append(n.lns, ln)
-		go func() {
-			defer wg.Done()
-			s.accept(ln)
-		}()
+		n.byBind[l.Bind] = ln
+		n.goes = append(n.goes, func() { s.accept(door{ln, n.gate}) })
 	}
 	if cfg.Control != nil {
 		for _, s := range n.servers {
 			if s.wl == nil {
 				continue
 			}
-			ln, err := startControl(cfg.Control, s, n.live)
+			ln, serve, err := startControl(cfg.Control, s, n.live, in)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			n.ctl = ln
+			n.ctl, n.ctlBind = ln, cfg.Control.Bind
+			n.goes = append(n.goes, func() { serve(door{ln, n.gate}) })
 			break
 		}
 	}
-	return n, nil
+	resumes := in.resume(n.servers)
+	if in != nil {
+		for _, line := range in.snap.Feed {
+			if feed != nil {
+				feed.q.Send(line)
+			}
+		}
+	}
+	return n, resumes, nil
+}
+
+// listenTCP is the listener a handoff carried for bind, or a new one.
+func listenTCP(bind string, in *inherited) (*net.TCPListener, error) {
+	ln, err := in.listener(bind)
+	if err != nil || ln != nil {
+		return ln, err
+	}
+	l, err := net.Listen("tcp", bind)
+	if err != nil {
+		return nil, err
+	}
+	return l.(*net.TCPListener), nil
 }
 
 // gated reports whether any listener holds a whitelist.
@@ -419,34 +494,33 @@ func gated(cfg *Config) bool {
 // startControl serves the control link over the first whitelisted listener's
 // list. A node has at most one whitelist file, so any further whitelisted
 // listener sees the same edits on its next reload.
-func startControl(c *Control, s *server, live *live) (net.Listener, error) {
+func startControl(c *Control, s *server, live *live, in *inherited) (*net.TCPListener, func(net.Listener), error) {
 	key, err := tunnel.DecodeKey(c.Key)
 	if err != nil {
-		return nil, fmt.Errorf("control: %w", err)
+		return nil, nil, fmt.Errorf("control: %w", err)
 	}
 	var allow []netip.Prefix
 	for _, a := range c.AllowFrom {
 		p, err := parsePrefix(a)
 		if err != nil {
-			return nil, fmt.Errorf("control: allow_from %q: %w", a, err)
+			return nil, nil, fmt.Errorf("control: allow_from %q: %w", a, err)
 		}
 		allow = append(allow, p)
 	}
 	srv, err := control.NewServer(s.wl, key, allow, s.mojang, live)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	ln, err := net.Listen("tcp", c.Bind)
+	ln, err := listenTCP(c.Bind, in)
 	if err != nil {
-		return nil, fmt.Errorf("control: %w", err)
+		return nil, nil, fmt.Errorf("control: %w", err)
 	}
 	guard := "loopback"
 	if len(c.AllowFrom) > 0 {
 		guard += "," + strings.Join(c.AllowFrom, ",")
 	}
 	log.Printf("control %s whitelist=%s allow=%s", c.Bind, s.Minecraft.Whitelist, guard)
-	go srv.Serve(ln)
-	return ln, nil
+	return ln, srv.Serve, nil
 }
 
 // Role is what this listener does, which is not configured anywhere: it follows
@@ -507,7 +581,10 @@ func (l Listener) PeerAddrs() []string {
 	return out
 }
 
-func newServer(l Listener) (*server, error) {
+func newServer(l Listener) (*server, error) { return newServerFrom(l, nil) }
+
+// newServerFrom is newServer with a tunnel resumed from a handoff, where r is not nil.
+func newServerFrom(l Listener, r *tunnel.Resume) (*server, error) {
 	switch l.Net {
 	case "", "tcp", "udp":
 	default:
@@ -530,7 +607,7 @@ func newServer(l Listener) (*server, error) {
 	}
 	// Its own by default, replaced by the node's when start builds one: a server
 	// constructed on its own still has to be able to record a session.
-	s := &server{Listener: l, live: newLive()}
+	s := &server{Listener: l, live: newLive(), gate: newGate()}
 	for _, a := range l.AllowFrom {
 		p, err := parsePrefix(a)
 		if err != nil {
@@ -558,7 +635,7 @@ func newServer(l Listener) (*server, error) {
 		s.motd = m
 	}
 	if len(l.Hops) > 0 || len(l.Peers) > 0 {
-		t, err := newTunnel(l)
+		t, err := newTunnel(l, r)
 		if err != nil {
 			return nil, err
 		}
@@ -567,8 +644,8 @@ func newServer(l Listener) (*server, error) {
 	return s, nil
 }
 
-func newTunnel(l Listener) (*tunnel.Node, error) {
-	opt := tunnel.Options{Name: l.Bind}
+func newTunnel(l Listener, r *tunnel.Resume) (*tunnel.Node, error) {
+	opt := tunnel.Options{Name: l.Bind, Resume: r}
 	if l.Net == "udp" {
 		opt.Bind = l.Bind
 	}
@@ -650,8 +727,13 @@ func (s *server) handle(c *net.TCPConn) {
 		log.Printf("%s: reject %s", s.Bind, c.RemoteAddr())
 		return
 	}
+	a := s.gate.enter(c)
+	if a == nil {
+		return // accepted as a handoff froze the node: the player reconnects
+	}
+	defer s.gate.leave(a)
 	if s.Minecraft != nil {
-		s.handleMinecraft(c)
+		s.handleMinecraft(c, a)
 		return
 	}
 	u, err := s.connect()
@@ -660,10 +742,25 @@ func (s *server) handle(c *net.TCPConn) {
 		return
 	}
 	defer u.Close()
-	relay(c, u)
+	r := newRelayer(c, u)
+	if !s.gate.start(a, r, &carry{bind: s.Bind}) {
+		return
+	}
+	s.finishPlain(r)
 }
 
-func (s *server) handleMinecraft(c *net.TCPConn) {
+// finishPlain runs a relay with no session attached, or leaves it to the next
+// process if a handoff halts it.
+func (s *server) finishPlain(r *relayer) {
+	r.run()
+	if r.carried() {
+		s.gate.park()
+		return
+	}
+	s.gate.end(r)
+}
+
+func (s *server) handleMinecraft(c *net.TCPConn, a *admission) {
 	c.SetReadDeadline(time.Now().Add(handshakeTimeout))
 	br := bufio.NewReaderSize(c, 4096)
 	h, err := mc.ReadHandshake(br)
@@ -675,7 +772,7 @@ func (s *server) handleMinecraft(c *net.TCPConn) {
 		s.serveStatus(c, br, h)
 		return
 	}
-	s.serveLogin(c, br, h)
+	s.serveLogin(c, br, h, a)
 }
 
 // serveStatus answers a server-list ping from this node and never dials.
@@ -727,7 +824,7 @@ func (s *server) chainDelay() time.Duration {
 	return min(s.tun.ChainRTT(), maxChainDelay)
 }
 
-func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake) {
+func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake, a *admission) {
 	ip := sourceIP(c.RemoteAddr())
 
 	// The whitelist check has to happen before we dial, so a stranger costs the
@@ -793,6 +890,15 @@ func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake) {
 		}
 	}
 
+	// From here the connection is a relay, which a handoff carries rather than
+	// cuts off. Before replace, so a handoff that froze the node first cannot
+	// have this login end a session it is carrying.
+	r := newRelayer(c, u)
+	k := &carry{bind: s.Bind}
+	if !s.gate.start(a, r, k) {
+		return
+	}
+
 	// One account, one session: end whatever this player already has open before
 	// opening another. Their client reconnecting is the usual reason there is one.
 	if n := s.live.replace(uuid, name); n > 0 {
@@ -820,14 +926,28 @@ func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake) {
 	s.countMu.Unlock()
 
 	rtt := watchRTT(c)
-	up, down, _, _ := relay(c, u)
+	k.sess, k.rtt = &sess, rtt
+	s.carryOn(sess, id, u, r, rtt)
+}
+
+// carryOn relays a login to its end and writes it down, whether it began here or
+// in the process before this one. If a handoff halts it instead, it is not over
+// and nothing is written: the next process carries on and writes it down there.
+func (s *server) carryOn(sess Session, id int64, u halfCloser, r *relayer, rtt *clientRTT) {
+	r.run()
+	if r.carried() {
+		s.gate.park()
+		return
+	}
+	s.gate.end(r)
+	up, down := r.ab.n, r.ba.n
 
 	s.live.remove(id)
 
 	sess.End, sess.Up, sess.Down = time.Now(), up, down
 	sess.Chain = chainCost(u, s.ChainLegs, up, down)
 	sess.RTT = rtt.end()
-	sess.Geo = s.geo.Get(ip)
+	sess.Geo = s.geo.Get(sess.IP)
 	s.live.record(sess)
 	// The count and the line that reports it, together. They are two steps, and
 	// two sessions ending at once would otherwise be able to print their counts
@@ -835,7 +955,7 @@ func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake) {
 	s.countMu.Lock()
 	sess.Online = s.online.Add(-1)
 	log.Printf("%s: logout %s name=%q uuid=%q for %s up=%s down=%s chain=%s%s%s online=%d",
-		s.Bind, ip, name, uuid, sess.For(),
+		s.Bind, sess.IP, sess.Name, sess.UUID, sess.For(),
 		size(up), size(down), size(int64(sess.Chain)), rttPart(sess.RTT), geoPart(sess.Geo), sess.Online)
 	s.feed.logout(sess)
 	s.countMu.Unlock()
@@ -869,14 +989,39 @@ func (s *server) serveTunnel() {
 
 func (s *server) serveStream(st *tunnel.Stream) {
 	defer st.Close()
+	a := s.gate.enter(nil)
+	if a == nil {
+		// Frozen for a handoff before anyone dialled for it. Halted, so the close
+		// above does not reset it: the next process offers it again and dials.
+		st.Halt()
+		return
+	}
+	defer s.gate.leave(a)
 	u, err := s.dial()
 	if err != nil {
 		log.Printf("%s: dial %s: %v", s.Bind, s.Upstream, err)
 		return
 	}
 	defer u.Close()
+	r := newRelayer(st, u)
 	start := time.Now()
-	up, down, chainErr, backendErr := relay(st, u)
+	if !s.gate.start(a, r, &carry{bind: s.Bind, start: start}) {
+		st.Halt()
+		return
+	}
+	s.finishStream(st, r, start)
+}
+
+// finishStream runs an exit's relay to its end and logs how it ended, or leaves it
+// to the next process if a handoff halts it.
+func (s *server) finishStream(st *tunnel.Stream, r *relayer, start time.Time) {
+	r.run()
+	if r.carried() {
+		s.gate.park()
+		return
+	}
+	s.gate.end(r)
+	up, down, chainErr, backendErr := r.ab.n, r.ba.n, r.ab.err, r.ba.err
 	// The only place the far end's own account of an ending is kept. The entry sees
 	// a reset and cannot tell a backend that hung up from a path that broke; this
 	// line is what tells them apart, and the stream id is what joins the two.
@@ -941,34 +1086,4 @@ func (s *server) allowed(a net.Addr) bool {
 		}
 	}
 	return false
-}
-
-// relay copies in both directions until both are done. Each direction half-closes
-// its own side on EOF rather than tearing down the whole connection, so a client
-// that stops sending doesn't cut off data still in flight from the server.
-//
-// When both ends are *net.TCPConn this still reaches splice(2) on Linux and the
-// payload never enters userspace: io.Copy looks at the concrete type, which the
-// interface does not hide from it. A tunnel stream on one side gives that up,
-// because the bytes have to be numbered before they can be sent.
-// The byte counts it returns are payload: what the session carried, before the
-// tunnel duplicated any of it.
-//
-// aErr and bErr are how each direction stopped: nil where the source reached a
-// clean end of stream, and the read or write error where it did not. Discarding
-// them is what left the exit unable to say whether a backend hung up or the path
-// to it broke, so the exit logs them; see serveStream.
-func relay(a, b halfCloser) (aToB, bToA int64, aErr, bErr error) {
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go pipe(b, a, &aToB, &aErr, &wg)
-	go pipe(a, b, &bToA, &bErr, &wg)
-	wg.Wait()
-	return aToB, bToA, aErr, bErr
-}
-
-func pipe(dst, src halfCloser, n *int64, err *error, wg *sync.WaitGroup) {
-	defer wg.Done()
-	*n, *err = io.Copy(dst, src)
-	dst.CloseWrite()
 }

@@ -28,6 +28,11 @@ type live struct {
 	next    int64
 	m       map[int64]open
 	closing bool
+	// frozen is set by a handoff, and from then on nothing here ends a session:
+	// the connections are about to belong to another process. endMu lets the
+	// handoff wait out an end already under way.
+	frozen bool
+	endMu  sync.RWMutex
 
 	// pending counts sessions that have not finished being written down. It
 	// outlives the register above by a hair: a session leaves m when its relay
@@ -96,7 +101,13 @@ func (l *live) replace(uuid, name string) int {
 	if uuid == "" && name == "" {
 		return 0
 	}
+	l.endMu.RLock()
+	defer l.endMu.RUnlock()
 	l.mu.Lock()
+	if l.frozen {
+		l.mu.Unlock()
+		return 0
+	}
 	var ends []func()
 	for _, o := range l.m {
 		if uuid != "" && o.UUID != "" {
@@ -124,7 +135,13 @@ func (l *live) done() { l.pending.Add(-1) }
 // wait does that, and they are separate because those goroutines cannot finish
 // while this one holds the lock.
 func (l *live) endAll() {
+	l.endMu.RLock()
+	defer l.endMu.RUnlock()
 	l.mu.Lock()
+	if l.frozen {
+		l.mu.Unlock()
+		return
+	}
 	l.closing = true
 	ends := make([]func(), 0, len(l.m))
 	for _, o := range l.m {
@@ -133,6 +150,25 @@ func (l *live) endAll() {
 	l.mu.Unlock()
 	for _, end := range ends {
 		end()
+	}
+}
+
+// freeze stops anything here from ending a session, once any end already under
+// way has run.
+func (l *live) freeze() {
+	l.endMu.Lock()
+	l.mu.Lock()
+	l.frozen = true
+	l.mu.Unlock()
+	l.endMu.Unlock()
+}
+
+// waitFor blocks until no more than n sessions are waiting to be written down, or
+// d passes. A handoff waits for every session but the ones it carries.
+func (l *live) waitFor(n int64, d time.Duration) {
+	deadline := time.Now().Add(d)
+	for l.pending.Load() > n && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

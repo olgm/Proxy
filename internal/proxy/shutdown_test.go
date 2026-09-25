@@ -76,7 +76,7 @@ func TestRunReturnsWhenStopped(t *testing.T) {
 
 	stop := make(chan struct{})
 	done := make(chan error, 1)
-	go func() { done <- Run(cfg, stop) }()
+	go func() { done <- Run(cfg, stop, nil) }()
 	close(stop)
 
 	select {

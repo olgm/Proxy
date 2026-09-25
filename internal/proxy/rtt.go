@@ -36,9 +36,30 @@ type clientRTT struct {
 }
 
 func watchRTT(c *net.TCPConn) *clientRTT {
-	w := &clientRTT{c: c, stop: make(chan struct{}), done: make(chan struct{})}
+	return resumeRTT(c, rttState{})
+}
+
+// rttState is a session's client-leg readings so far, carried by a handoff so the
+// summary at logout covers the whole session and not only its last process.
+type rttState struct {
+	RTT     []time.Duration `json:"rtt,omitempty"`
+	RTTVar  []time.Duration `json:"rttvar,omitempty"`
+	Min     time.Duration   `json:"min,omitempty"`
+	Retrans uint32          `json:"retrans,omitempty"`
+}
+
+func resumeRTT(c *net.TCPConn, st rttState) *clientRTT {
+	w := &clientRTT{c: c, stop: make(chan struct{}), done: make(chan struct{}),
+		rtt: st.RTT, rttvar: st.RTTVar, min: st.Min, retrans: st.Retrans}
 	go w.run()
 	return w
+}
+
+// halt stops the sampling without a last reading and hands back what it has.
+func (w *clientRTT) halt() rttState {
+	close(w.stop)
+	<-w.done
+	return rttState{RTT: w.rtt, RTTVar: w.rttvar, Min: w.min, Retrans: w.retrans}
 }
 
 func (w *clientRTT) run() {

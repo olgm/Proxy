@@ -112,6 +112,17 @@ type Inherited struct {
 	names    []string
 }
 
+// NewInherited is what Take would return for a snapshot and files that reached
+// this process some other way. Tests use it to stand in for systemd.
+func NewInherited(snapshot []byte, files []File) *Inherited {
+	in := &Inherited{Snapshot: snapshot, files: map[string]*os.File{}, names: []string{snapshotName}}
+	for _, f := range files {
+		in.files[f.Name] = f.File
+		in.names = append(in.names, f.Name)
+	}
+	return in
+}
+
 // Take claims the descriptors systemd passed this process, if it passed any, and
 // clears the variables that described them. Nil means a clean start.
 func Take() (*Inherited, error) {

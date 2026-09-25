@@ -50,7 +50,7 @@ func main() {
 		log.Printf("%v: ending sessions", <-sig)
 		close(stop)
 	}()
-	if err := proxy.Run(cfg, stop); err != nil {
+	if err := proxy.Run(cfg, stop, nil); err != nil {
 		log.Fatalf("%v", err)
 	}
 }
