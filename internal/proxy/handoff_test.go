@@ -619,3 +619,52 @@ func TestRollbackCarriesTheSessionsOfARenamedListener(t *testing.T) {
 	p.flowing(t)
 	p.finish(t)
 }
+
+// A session whose listener the new config no longer has cannot be carried on. It
+// ends, and it is written down as ending at the handoff: once, and only once the
+// node is ready, since a start that fails before then leaves the same snapshot to
+// the next one.
+func TestASessionWithNoListenerLeftIsWrittenDownOnce(t *testing.T) {
+	useMojang(t, nil)
+	backend, _ := echoBackend(t)
+	sessions := filepath.Join(t.TempDir(), "sessions.jsonl")
+	listener := func(bind string) *Config {
+		return &Config{Name: "ch", SessionLog: sessions, Listeners: []Listener{{Bind: bind, Upstream: backend,
+			Minecraft: &Minecraft{RewriteHost: "mc.example.com", RewritePort: 25565,
+				Whitelist: whitelistFile(t, "Notch:"+notchUUID+"\n")}}}}
+	}
+	n := mustStart(t, listener(sharedPort(t)))
+	p := play(t, n.lns[0].Addr().String())
+	p.flowing(t)
+	store := newFDStore(t)
+	if err := n.handoff(store.keep); err != nil {
+		t.Fatal(err)
+	}
+	renamed := listener("127.0.0.1:0")
+	// One start that dies before READY, then one that makes it.
+	failed, _, err := build(renamed, store.start())
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed.close()
+	next, resumes, err := build(renamed, store.start())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer next.close()
+	if past, _ := next.live.History(nil, 10); len(past) != 0 {
+		t.Fatalf("written down before the node was ready: %+v", past)
+	}
+	next.serve(resumes)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		past, _ := next.live.History(nil, 10)
+		if len(past) == 1 && past[0].UUID == notchUUID {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("written down %d times, want once: %+v", len(past), past)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

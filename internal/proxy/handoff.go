@@ -497,7 +497,9 @@ func (in *inherited) file(name string) *os.File {
 
 // resume rebuilds every relay the snapshot carries onto the node's servers, and
 // returns what starts each one again. A relay whose listener is gone, or one of
-// whose ends did not come through, ends here the way a restart would have ended it.
+// whose ends did not come through, ends the way a restart would have ended it —
+// once the node is ready, since a start that fails before then is retried from
+// this same snapshot and would write its session down twice.
 func (in *inherited) resume(servers []*server) []func() {
 	if in == nil {
 		return nil
@@ -514,15 +516,21 @@ func (in *inherited) resume(servers []*server) []func() {
 			a, b = in.end(s, rs.A), in.end(s, rs.B)
 		}
 		if s == nil || a == nil || b == nil {
-			for _, e := range []halfCloser{a, b} {
-				if e != nil {
-					e.Close()
+			rec := s
+			if rec == nil {
+				rec = servers[0] // any of them: they share the node's log and feed
+			}
+			out = append(out, func() {
+				for _, e := range []halfCloser{a, b} {
+					if e != nil {
+						e.Close()
+					}
 				}
-			}
-			if s != nil && rs.Session != nil {
-				s.recordLost(rs)
-			}
-			log.Printf("handoff: a relay on %s did not survive the handoff", rs.Bind)
+				if rs.Session != nil {
+					rec.recordLost(rs)
+				}
+				log.Printf("handoff: a relay on %s did not survive the handoff", rs.Bind)
+			})
 			continue
 		}
 		r := newRelayer(a, b)
@@ -589,13 +597,14 @@ func (s *server) resume(rs relayState, r *relayer) func() {
 }
 
 // recordLost writes down a session the handoff could not carry on, so history has
-// it: it ended at the handoff with what it had carried until then.
+// it: it ended at the handoff with what it had carried until then. The session
+// need not have been this server's, only this node's.
 func (s *server) recordLost(rs relayState) {
 	st := rs.Session
 	sess := Session{Node: s.node, IP: st.IP, Name: st.Name, UUID: st.UUID, Proto: st.Proto, Start: st.Start,
 		End: time.Now(), Up: rs.AB.N, Down: rs.BA.N}
 	s.live.record(sess)
 	log.Printf("%s: logout %s name=%q uuid=%q for %s up=%s down=%s (lost in a handoff)",
-		s.Bind, sess.IP, sess.Name, sess.UUID, sess.For(), size(sess.Up), size(sess.Down))
+		rs.Bind, sess.IP, sess.Name, sess.UUID, sess.For(), size(sess.Up), size(sess.Down))
 	s.feed.logout(sess)
 }
