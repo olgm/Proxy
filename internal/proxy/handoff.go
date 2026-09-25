@@ -48,6 +48,10 @@ type Handoff struct {
 	From   *handoff.Inherited
 	Keep   func(snapshot []byte, files []handoff.File) error
 	Ready  func()
+	// Drop takes entries out of the store at once, and returns once they are
+	// gone: a socket the store still holds keeps its port however many times
+	// this process closes its own copy.
+	Drop func(names []string)
 }
 
 type snapshot struct {
@@ -312,6 +316,7 @@ type inherited struct {
 	snap  snapshot
 	from  *handoff.Inherited
 	binds map[string]*listenerState
+	drop  func(names []string)
 }
 
 func readInherited(from *handoff.Inherited) *inherited {
@@ -339,6 +344,52 @@ func readInherited(from *handoff.Inherited) *inherited {
 		in.binds[ls.Bind] = ls
 	}
 	return in
+}
+
+// prune lets go of every inherited socket the new config will not take, before
+// anything is bound. A listener left in the store keeps its port, so a node that
+// cannot read the snapshot, or whose config names a listener differently now,
+// would otherwise fail to bind and crash again on every restart. The snapshot
+// itself stays in the store until the node is ready: a crash before then starts
+// from it again.
+func (in *inherited) prune(cfg *Config) {
+	if in == nil {
+		return
+	}
+	keep := map[string]bool{}
+	binds := map[string]bool{}
+	for _, l := range cfg.Listeners {
+		binds[l.Bind] = true
+		if ls := in.binds[l.Bind]; ls != nil {
+			keep[ls.TCP], keep[ls.Bound], keep[ls.Dial] = true, true, true
+		}
+	}
+	if cfg.Control != nil && cfg.Control.Bind == in.snap.ControlBind {
+		keep[in.snap.Control] = true
+	}
+	for _, rs := range in.snap.Relays {
+		if binds[rs.Bind] {
+			keep[rs.A.FD], keep[rs.B.FD] = true, true
+		}
+	}
+	var gone []string
+	for _, name := range in.from.Names() {
+		if keep[name] {
+			continue
+		}
+		f := in.from.File(name)
+		if f == nil {
+			continue // the snapshot, which was read and closed already
+		}
+		f.Close()
+		gone = append(gone, name)
+	}
+	if len(gone) > 0 {
+		log.Printf("handoff: letting go of %d socket(s) the new config has no use for", len(gone))
+		if in.drop != nil {
+			in.drop(gone)
+		}
+	}
 }
 
 // tunnel is what a listener's tunnel resumes from, or nil to start clean.

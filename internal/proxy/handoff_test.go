@@ -416,3 +416,57 @@ func TestNewerSnapshotStartsClean(t *testing.T) {
 		t.Fatalf("a connection nobody could carry was left open: %v", err)
 	}
 }
+
+// A node that cannot use what it inherited — a snapshot from a newer build, here —
+// still has to come up on the same port. The listening socket it cannot place is
+// still open in the store, and binding beside it fails; it has to be let go of
+// first, or the node crashes and inherits the same thing again on every restart.
+func TestHandoffStartsCleanOnTheSamePort(t *testing.T) {
+	useMojang(t, nil)
+	backend, _ := echoBackend(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	cfg := &Config{Name: "ch", Listeners: []Listener{{Bind: addr, Upstream: backend,
+		Minecraft: &Minecraft{RewriteHost: "mc.example.com", RewritePort: 25565}}}}
+	n := mustStart(t, cfg)
+	p := play(t, addr)
+	p.flowing(t)
+
+	var files []handoff.File
+	if err := n.handoff(func(_ []byte, fs []handoff.File) error {
+		for _, f := range fs {
+			files = append(files, handoff.File{Name: f.Name, File: dupFile(t, f.File)})
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var dropped []string
+	in := readInherited(handoff.NewInherited([]byte(`{"version":99}`), files))
+	in.drop = func(names []string) { dropped = names }
+	next, _, err := build(cfg, in)
+	if err != nil {
+		t.Fatalf("a clean start could not bind its own port: %v", err)
+	}
+	next.serve(nil)
+	defer next.close()
+	if len(dropped) != len(files) {
+		t.Fatalf("dropped %v from the store, want all %d", dropped, len(files))
+	}
+	// The player it could not carry is disconnected, as in a restart, and a new
+	// one gets in on the same port.
+	select {
+	case <-p.read:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the player nobody could carry was left hanging")
+	}
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+}

@@ -67,7 +67,11 @@ func main() {
 		close(stop)
 	}()
 
-	h := &proxy.Handoff{From: from, Ready: func() { ready(from) }}
+	h := &proxy.Handoff{From: from, Ready: func() { ready(from) }, Drop: func(names []string) {
+		if err := handoff.Forget(names); err != nil {
+			log.Printf("handoff: forget: %v", err)
+		}
+	}}
 	hand := make(chan struct{})
 	// Caught whether or not a handoff is possible: left to its default, SIGUSR2
 	// kills the process, and every session with it, without a word.

@@ -259,7 +259,9 @@ var newMojang = func() mojangAPI { return mojang.New() }
 func Run(cfg *Config, stop <-chan struct{}, h *Handoff) error {
 	var in *inherited
 	if h != nil {
-		in = readInherited(h.From)
+		if in = readInherited(h.From); in != nil {
+			in.drop = h.Drop
+		}
 	}
 	n, resumes, err := build(cfg, in)
 	if err != nil {
@@ -371,7 +373,9 @@ func (n *node) serve(resumes []func()) {
 func build(cfg *Config, in *inherited) (*node, []func(), error) {
 	if in != nil {
 		// Whatever the config below has no use for ends here, as it would have
-		// in a plain restart.
+		// in a plain restart — and before anything is bound, since what the
+		// store still holds keeps its port.
+		in.prune(cfg)
 		defer in.from.Close()
 	}
 	if len(cfg.Listeners) == 0 {

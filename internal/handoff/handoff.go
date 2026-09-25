@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -102,7 +103,8 @@ func Forget(names []string) error {
 			return err
 		}
 	}
-	return nil
+	// Returns once they are gone, so a port systemd was holding is free to bind.
+	return barrier(c)
 }
 
 // Inherited is what a previous process left: its snapshot, and the files it kept.
@@ -162,12 +164,14 @@ func inherit(names []string, fds []int) (*Inherited, error) {
 			in.files[name] = f
 			continue
 		}
-		// Its offset is wherever the writer left it: descriptors share one.
+		// Its offset is wherever the writer left it: descriptors share one. One
+		// that cannot be read leaves the sockets without a snapshot, which the
+		// node treats as a clean start rather than failing to start at all.
 		b, err := readFrom0(f)
 		f.Close()
 		if err != nil {
-			in.Close()
-			return nil, fmt.Errorf("handoff: snapshot: %w", err)
+			log.Printf("handoff: snapshot: %v", err)
+			continue
 		}
 		in.Snapshot = b
 	}
