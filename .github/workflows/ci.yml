@@ -38,3 +38,18 @@ jobs:
             echo "$bad"
             exit 1
           fi
+
+  systemd:
+    # Installs a real unit and restarts a real service, so it runs on a runner of
+    # its own and is skipped everywhere else. It is the only test of a handoff
+    # under systemd itself rather than a stand-in for its notify socket.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: deploy under systemd
+        run: PROXY_SYSTEMD_TEST=1 go test ./cmd/proxyctl -run TestDeployUnderRealSystemd -count=1 -v
