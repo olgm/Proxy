@@ -728,3 +728,50 @@ func TestHandoffStraightAfterATakeoverCarriesEveryRelay(t *testing.T) {
 		t.Fatalf("the backend was dialled %d times, want once", got)
 	}
 }
+
+// slowMojang answers a name lookup only once answer is closed, and says on asked
+// when one has begun.
+type slowMojang struct {
+	stubMojang
+	asked, answer chan struct{}
+}
+
+func (m slowMojang) UUIDFor(name, ip string) (string, bool) {
+	select {
+	case m.asked <- struct{}{}:
+	default:
+	}
+	<-m.answer
+	return m.stubMojang.UUIDFor(name, ip)
+}
+
+// A login still being checked when the grace runs out is cut off, and goes no
+// further. A name lookup that outlasted the grace used to finish after the cut,
+// clear the deadline that made it, and hand the backend a whole login from our
+// address before the relay was refused.
+func TestHandoffCutsOffALoginInItsWhitelistCheck(t *testing.T) {
+	m := slowMojang{stubMojang{map[string]string{"renamed": notchUUID}}, make(chan struct{}, 1), make(chan struct{})}
+	prev := newMojang
+	newMojang = func() mojangAPI { return m }
+	t.Cleanup(func() { newMojang = prev })
+	backend, dials := echoBackend(t)
+	cfg := &Config{Name: "ch", Listeners: []Listener{{Bind: "127.0.0.1:0", Upstream: backend,
+		Minecraft: &Minecraft{RewriteHost: "mc.example.com", RewritePort: 25565,
+			Whitelist: whitelistFile(t, "Notch:"+notchUUID+"\n")}}}}
+	n := mustStart(t, cfg)
+	// Before 1.19 there is no UUID, and a name the list does not hold is looked up.
+	c := dialIngress(t, n.lns[0].Addr().String(), 47, mc.IntentLogin, loginStart("Renamed", nil))
+	<-m.asked
+	if err := n.handoff(func([]byte, []handoff.File) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	close(m.answer)
+	c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := c.Read(make([]byte, 1)); err == nil {
+		t.Fatal("the login was not cut off")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := dials.Load(); got != 0 {
+		t.Fatalf("the backend was dialled %d time(s) for a login the handoff had cut off", got)
+	}
+}

@@ -860,6 +860,12 @@ func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake, a
 		}
 		login = raw
 	}
+	// A handoff cuts off a login still being checked with a deadline, which a
+	// check that outlasts the grace would clear here and go on to open the chain
+	// and send the login up it. It goes no further: nor past the dial below.
+	if s.gate.isFrozen() {
+		return
+	}
 	c.SetReadDeadline(time.Time{})
 
 	h.RewriteAddress(s.Minecraft.RewriteHost)
@@ -873,6 +879,9 @@ func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake, a
 		return
 	}
 	defer u.Close()
+	if s.gate.isFrozen() {
+		return
+	}
 
 	if _, err := u.Write(h.Encode()); err != nil {
 		return

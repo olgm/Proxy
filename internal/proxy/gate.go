@@ -98,6 +98,14 @@ func (g *gate) isShut() bool {
 	return g.shut
 }
 
+// isFrozen reports whether a handoff has frozen the node, which is also when it
+// cuts off every connection still being admitted.
+func (g *gate) isFrozen() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.frozen
+}
+
 func (g *gate) shutDoors() {
 	g.mu.Lock()
 	g.shut = true
