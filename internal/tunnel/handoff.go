@@ -297,7 +297,7 @@ func (d *dir) restore(st DirState, now time.Time) {
 		d.want[seq] = &hole{first: now}
 	}
 	if d.acked < d.horizon() {
-		d.moved = now
+		d.moved, d.advanced = now, now
 	}
 	if st.Err != "" {
 		d.err = errorNamed(st.Err)

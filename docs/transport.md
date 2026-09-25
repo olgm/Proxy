@@ -108,7 +108,7 @@ the fields exist because the right value depends on the path, not on Minecraft.
 | `nack_min_ms`, `nack_max_ms` | 10, 1000 | clamp on how often a hole is asked for again, and on how often a quiet sender repeats its horizon: `RTT + 4·mdev` on that leg, held between these. Equal values fix it |
 | `head_quiet_ms` | 10 | how long a sender with chunks unacknowledged stays silent before saying how far it got |
 | `ack_ms`, `ack_repeat_ms` | 20, 250 | how often the exit reports what it has read when that moved, and when it has not |
-| `probe_min_ms`, `probe_max_ms` | 100, 1000 | clamp on the entry's blind re-send of its highest chunk, the backstop behind the horizon: end-to-end `RTT + 4·mdev`, doubling per try |
+| `probe_min_ms`, `probe_max_ms` | 100, 1000 | clamp on the entry's blind re-send of its highest chunk, the backstop behind the horizon: end-to-end `RTT + 4·mdev`, doubling per try. The session ends after eight unanswered, and no sooner than `repair_ms` |
 
 Minecraft traffic is light — a few tens of KB/s at most — so all of these can be
 made a good deal more aggressive than the defaults without the extra packets

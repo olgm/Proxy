@@ -86,6 +86,9 @@ a whole tick away. Two things cover it, per leg first and end to end as a backst
   timeout, which is fast enough to look like it works and slow enough to stall a
   session under real loss. The probe has to cross every relay to work — that is what
   the RTX flag is for — because the leg that lost the tail may be the last one.
+  It is also how the originator learns the path is gone: it gives up after 8
+  unanswered, and never before `repair_ms` without progress. The count alone is
+  spent in under a second on a fast path, while the far end is still repairing.
 
 Nothing distinguishes a quiet session from a dead path either. Link liveness does,
 but only as half the test: a link is called up on a returned pong, so a node that has
@@ -108,7 +111,7 @@ tuned per route without a rebuild.
 | NACK re-ask | `nack_min_ms`–`nack_max_ms` clamp on that leg's `srtt + 4·mdev` | 10 ms – 1 s |
 | ACK | `ack_ms` on advance; `ack_repeat_ms` otherwise | 20 ms; 250 ms |
 | HEAD | `head_quiet_ms` after the last send with chunks unacknowledged; then the NACK re-ask interval | 10 ms |
-| tail probe | `probe_min_ms`–`probe_max_ms` clamp on end-to-end `srtt + 4·mdev`, doubling, 8 tries | 100 ms – 1 s |
+| tail probe | `probe_min_ms`–`probe_max_ms` clamp on end-to-end `srtt + 4·mdev`, doubling; gives up after 8 tries and `repair_ms` without progress | 100 ms – 1 s |
 | give up on a hole | `repair_ms` | 5 s |
 | closed stream lingers | fixed | 60 s, answering late NACKs and refusing to be re-opened |
 | relay stream idle | `idle_ms` | 120 s |

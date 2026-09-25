@@ -570,6 +570,51 @@ func TestUnrepairableStreamFails(t *testing.T) {
 	}
 }
 
+// The sender's probes are how it finds out a path is gone, but it must not decide
+// that sooner than the far end gives up on a hole. Eight probes back off from the
+// round trip, so on a fast path they are spent in under a second, and an outage
+// the repair window would ride out ended the stream.
+func TestAnOutageShorterThanTheRepairWindowIsRiddenOut(t *testing.T) {
+	const repair = 3 * time.Second
+	var cut atomic.Bool
+	k := NewKey()
+	exit := mustNode(t, Options{Name: "exit", Bind: local("0"), Repair: repair,
+		Peers: []LinkConfig{{Addr: "127.0.0.1", Key: k}}})
+	w := newWire(t, exit.Addr(), func(int) bool { return cut.Load() })
+	entry := mustNode(t, Options{Name: "entry", Repair: repair,
+		Hops: []LinkConfig{{Addr: w.String(), Key: k}}})
+
+	s, err := entry.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Write([]byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	es, err := exit.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := startReader(es, nil)
+	// A round trip first, so the entry probes on the short clock.
+	waitFor(t, "the first ACK", func() bool {
+		s.down.mu.Lock()
+		defer s.down.mu.Unlock()
+		return s.down.acked == 1
+	})
+
+	cut.Store(true)
+	if _, err := s.Write([]byte("b")); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(repair / 2)
+	cut.Store(false)
+	if _, err := s.Write([]byte("c")); err != nil {
+		t.Fatalf("the entry gave up during a %v outage: %v", repair/2, err)
+	}
+	waitFor(t, "the stream to carry on", func() bool { return r.len() == 3 })
+}
+
 // A node that has just started has no link it can call up: a link is only up once
 // a pong has come back, and the first ping is a second away. A stream that arrives
 // in that window is being fed and must not be given up on.

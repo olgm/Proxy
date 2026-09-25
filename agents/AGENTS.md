@@ -81,6 +81,9 @@ Notes for agents working on this repo.
 - Chunk numbers are the only identity in the tunnel. Duplicates carry the same number
   on purpose — that is what makes a copy distinguishable from a gap — so nothing may
   renumber a chunk as it passes through.
+- A sender never gives up on a stream sooner than `repair_ms` without progress,
+  whatever its probe count: eight backed-off probes take under a second on a fast
+  path, while the far end is still repairing.
 - The protocol version in a handshake is the client's word like everything else. A
   Login Start that does not end where that version says it should was parsed on the
   wrong layout: drop the UUID and match the name. Never trust bytes read by a branch

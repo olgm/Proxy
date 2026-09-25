@@ -46,6 +46,13 @@ code that is not deployed yet: the first bullets below.
   whose entry reaches the exit through nothing but relays could lose a session this
   way, and only when that direction then went quiet for several seconds; the
   tunnel tests hit it in about one run in a hundred.
+- **A sender waits out the repair window before giving up.** An entry or exit
+  gave up on a stream after eight unanswered probes. They back off from the round
+  trip, so on a path faster than about 90 ms they were spent before `repair_ms` —
+  in 0.9 s on loopback — while the far end was still repairing. It now also waits
+  until `repair_ms` has passed without progress. With the default timers a slower
+  path is unchanged; with the faster probe timers docs/transport.md suggests,
+  every path gave up in under two seconds. This was the tunnel tests' other flake.
 - **Every session records the player's own leg.** The entry reads the client
   connection's `TCP_INFO` every five seconds and once more as it ends: the lowest
   round trip the kernel saw, the median, p90 and worst of its smoothed round trip,

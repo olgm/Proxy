@@ -25,8 +25,11 @@ var (
 )
 
 const (
-	// maxProbes bounds the originator's blind retransmits before it gives up on
-	// the path entirely. Backed off, it works out near the repair deadline.
+	// maxProbes is the fewest blind retransmits the originator makes before it
+	// gives up on the path entirely, and it waits out the repair deadline too:
+	// backed off from a long round trip the probes take about that long, but on a
+	// fast path they are spent in under a second while the far end is still
+	// repairing.
 	maxProbes = 8
 	// linger keeps a closed stream able to answer a late NACK, and keeps a
 	// retransmitted chunk from being mistaken for a new stream and dialled again.
@@ -81,6 +84,10 @@ type dir struct {
 	// direction has been quiet for HeadQuiet, then again every leg RTO.
 	lastSent time.Time
 	lastHead time.Time
+	// advanced is the last time acked moved, or a send found nothing outstanding.
+	// Every probe resets moved; nothing but progress resets this, so it says how
+	// long the sender has been waiting.
+	advanced time.Time
 
 	// Inbound state.
 	top     uint64 // one past the highest sequence seen
@@ -130,6 +137,9 @@ func (d *dir) write(p []byte) (int, error) {
 			return total, err
 		}
 		c := &chunk{seq: d.next, data: slices.Clone(p[:take]), sentAt: time.Now()}
+		if d.acked == d.next {
+			d.advanced = c.sentAt
+		}
 		d.next++
 		d.buf[c.seq] = c
 		d.bufSize += take
@@ -159,6 +169,9 @@ func (d *dir) finish() error {
 		return err
 	}
 	c := &chunk{seq: d.next, flags: flagFin, sentAt: time.Now()}
+	if d.acked == d.next {
+		d.advanced = c.sentAt
+	}
 	d.next++
 	d.buf[c.seq] = c
 	if d.moved.IsZero() {
@@ -369,6 +382,7 @@ func (d *dir) onAck(through uint64) bool {
 	d.acked = through
 	d.probes = 0
 	d.moved = now
+	d.advanced = now
 	d.cond.Broadcast()
 	return true
 }
@@ -456,7 +470,7 @@ func (d *dir) tick(now time.Time) {
 	}
 	if d.originates() && d.acked < d.next && !d.moved.IsZero() {
 		if now.Sub(d.moved) >= d.probeWait() {
-			if d.probes >= maxProbes {
+			if d.probes >= maxProbes && now.Sub(d.advanced) >= d.s.n.opt.Repair {
 				dead = true
 			} else {
 				d.probes++
