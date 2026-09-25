@@ -150,7 +150,12 @@ Notes for agents working on this repo.
   an older build would misread bumps `handoffVersion`, and rolling back across one
   costs a restart. Between a freeze and the new process's READY nothing may be
   sent to a player, the backend or a peer: a crash in that window restarts from the
-  same snapshot, which is only safe while nothing it describes has moved.
+  same snapshot, which is only safe while nothing it describes has moved. The same
+  goes for writing a session down and for letting go of the store: before READY
+  the new process drops only listening sockets its config no longer names. A
+  listener is known across a handoff by `net` and `bind` together, and every
+  carried relay joins the gate before READY, so a handoff straight after one
+  finds it.
 - A session is keyed by uuid everywhere it is read back, and a client before 1.19
   sends none. The whitelist matched the login to an identity in order to allow it,
   so the login takes that identity onward. A record without one belongs to nobody.
