@@ -112,6 +112,15 @@ The linger matters: without it a retransmitted chunk arriving after a stream clo
 would read as a brand new stream, and the exit would dial the backend again. That is
 one more connection to the backend from the egress address per stray copy.
 
+The linger only covers a stream the exit still remembers. One it has forgotten — it
+restarted, or the stream ended longer ago than the linger — is covered by the other
+rule: **the exit hands a stream to `Accept`, and so dials, only once chunk 0 is in
+hand.** A chunk from further in creates state and asks for the missing start like
+any other hole, so a start that merely arrived late opens the stream the moment it
+lands. When nobody can supply it, the hole outlives the repair window, the stream is
+reset, and the reset tells the chain. Before this, a restarted exit dialled the
+backend for the next chunk of every session it had been carrying.
+
 A stream that ends is accounted for at both ends, and only together do the two say
 what happened. The entry logs `tunnel: reset by peer` when a RESET arrives, which
 carries no reason from the far end by design. The exit logs `closed after … chain=…

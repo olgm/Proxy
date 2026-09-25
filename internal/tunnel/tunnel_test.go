@@ -662,3 +662,103 @@ func TestTrafficIsZeroBeforeAnythingIsSent(t *testing.T) {
 		t.Errorf("unused stream already cost %+v", got)
 	}
 }
+
+// rawPeer is a hand-driven previous hop: it seals whatever datagram a test builds
+// and reads back what the node under test answers.
+type rawPeer struct {
+	conn *net.UDPConn
+	seal *Sealer
+}
+
+func dialRaw(t *testing.T, to *net.UDPAddr, key []byte) *rawPeer {
+	t.Helper()
+	conn, err := net.DialUDP("udp", nil, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	seal, err := NewSealer(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &rawPeer{conn: conn, seal: seal}
+}
+
+func (r *rawPeer) data(t *testing.T, stream, seq uint64, flags byte, body string) {
+	t.Helper()
+	if _, err := r.conn.Write(r.seal.Seal(nil, appendData(nil, stream, seq, flags, []byte(body)))); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An exit that has no record of a stream must not dial the backend for a chunk
+// from the middle of one. That is what a restarted exit used to do with the next
+// chunk of every session it had been carrying: open a connection to the backend
+// from the egress address and hand it half of somebody's encrypted stream. It
+// asks for the missing start instead, and resets the stream when nobody can
+// supply it.
+func TestExitDoesNotDialForTheMiddleOfAStream(t *testing.T) {
+	k := NewKey()
+	exit := mustNode(t, Options{Name: "exit", Bind: local("0"), Repair: 200 * time.Millisecond,
+		Peers: []LinkConfig{{Addr: "127.0.0.1", Key: k}}})
+	peer := dialRaw(t, exit.Addr(), k)
+	peer.data(t, 42, 7, 0, "the middle")
+
+	accepted := make(chan *Stream, 1)
+	go func() {
+		if s, err := exit.Accept(); err == nil {
+			accepted <- s
+		}
+	}()
+
+	peer.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 2048)
+	for {
+		n, err := peer.conn.Read(buf)
+		if err != nil {
+			t.Fatalf("the exit never reset the stream it could not start: %v", err)
+		}
+		plain, err := peer.seal.Open(nil, buf[:n])
+		if err != nil {
+			continue
+		}
+		if p, err := decode(plain); err == nil && p.typ == msgReset && p.stream == 42 {
+			break
+		}
+	}
+	select {
+	case <-accepted:
+		t.Fatal("the exit accepted a stream from its middle")
+	default:
+	}
+}
+
+// The first chunk arriving late is not the same thing: the stream opens the
+// moment it lands, and reads in order from the start.
+func TestExitOpensAStreamWhoseStartArrivesLate(t *testing.T) {
+	k := NewKey()
+	exit := mustNode(t, Options{Name: "exit", Bind: local("0"),
+		Peers: []LinkConfig{{Addr: "127.0.0.1", Key: k}}})
+	peer := dialRaw(t, exit.Addr(), k)
+	peer.data(t, 43, 1, 0, "world")
+	peer.data(t, 43, 2, flagFin, "")
+	peer.data(t, 43, 0, 0, "hello ")
+
+	got := make(chan string, 1)
+	go func() {
+		s, err := exit.Accept()
+		if err != nil {
+			return
+		}
+		b, _ := io.ReadAll(s)
+		got <- string(b)
+	}()
+	select {
+	case b := <-got:
+		if b != "hello world" {
+			t.Fatalf("read %q", b)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stream never opened")
+	}
+}

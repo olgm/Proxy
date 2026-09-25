@@ -301,6 +301,18 @@ func (d *dir) read(p []byte) (int, error) {
 	}
 }
 
+// holds reports whether seq has arrived at a terminator, whether or not it has
+// been read yet.
+func (d *dir) holds(seq uint64) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if seq < d.deliver {
+		return true
+	}
+	_, ok := d.pending[seq]
+	return ok
+}
+
 // onAck frees everything the far end has already read, and reports whether the
 // watermark moved — a repeat carries no news and is not worth passing on.
 func (d *dir) onAck(through uint64) bool {
@@ -520,6 +532,9 @@ type Stream struct {
 	// Link keepalives are not here: a ping belongs to the leg, not to a session,
 	// and it is sent whether anyone is playing or not.
 	sent, recv atomic.Uint64
+
+	// offered is set once the exit has handed the stream to Accept. See offer.
+	offered atomic.Bool
 
 	mu       sync.Mutex
 	lastSeen time.Time

@@ -357,21 +357,8 @@ func (n *Node) handle(l *Link, p packet, size int) {
 		}
 		s = n.newStream(p.stream)
 		n.streams[p.stream] = s
-		n.mu.Unlock()
-		if s.rx != nil {
-			select {
-			case n.accept <- s:
-			default:
-				n.mu.Lock()
-				delete(n.streams, s.id)
-				n.mu.Unlock()
-				log.Printf("%s: accept backlog full, dropping stream", n.opt.Name)
-				return
-			}
-		}
-	} else {
-		n.mu.Unlock()
 	}
+	n.mu.Unlock()
 
 	now := time.Now()
 	s.touch(now)
@@ -392,6 +379,9 @@ func (n *Node) handle(l *Link, p packet, size int) {
 			return // closed, and kept only so a late NACK still finds an answer
 		}
 		data.recv(p)
+		if s.rx != nil && !s.offered.Load() && s.rx.holds(0) {
+			n.offer(s)
+		}
 	case msgHead:
 		if s.gone() {
 			return
@@ -413,6 +403,27 @@ func (n *Node) handle(l *Link, p packet, size int) {
 			s.sent.Add(uint64(k.send(plain, 1, false)))
 		}
 		s.abort(ErrReset)
+	}
+}
+
+// offer hands a stream to Accept once its first chunk has arrived, and not before.
+// A chunk from the middle of a stream this node has no record of belongs to a
+// stream it lost track of — it restarted, or finished the stream long enough ago
+// to forget it — and dialling the backend for one would hand the backend the
+// middle of somebody's session from our egress address. Such a stream is left to
+// fail its repair deadline instead, and the reset that sends tells the rest of the
+// chain it is gone.
+func (n *Node) offer(s *Stream) {
+	if !s.offered.CompareAndSwap(false, true) {
+		return
+	}
+	select {
+	case n.accept <- s:
+	default:
+		n.mu.Lock()
+		delete(n.streams, s.id)
+		n.mu.Unlock()
+		log.Printf("%s: accept backlog full, dropping stream", n.opt.Name)
 	}
 }
 
