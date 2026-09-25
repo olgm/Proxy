@@ -40,7 +40,7 @@ Notes for agents working on this repo.
 | `internal/webhook` | one Discord webhook client: content limit, 429s, mention suppression, one image attachment, delete, and a queue that coalesces and drops rather than blocking. stdlib only. |
 | `internal/handoff` | systemd's file descriptor store, spoken directly: store named sockets and an unlinked snapshot file, barrier, READY/STATUS, take them back as LISTEN_FDS, forget them. How a deploy moves a running proxyd's sessions into the next one. stdlib only. |
 | `internal/version` | the one version every binary here reports, and the commit `go build` stamps beside it. |
-| `internal/proxy` | listeners, allowlist, whitelist gate, relay over TCP or tunnel, the control server. |
+| `internal/proxy` | listeners, allowlist, whitelist gate, relay over TCP or tunnel, the control server, and the handoff that moves every relay into the next process (`handoff.go`, `gate.go`). |
 | `cmd/proxyd` | node runtime. Same binary on every node. `proxyd ctl` is the local control client. |
 | `cmd/proxyctl` | deployer, and `whitelist` verbs over ssh. Operator machine only, never installed on a node. |
 | `cmd/proxybot` | the Discord bot. One node; reaches every whitelisted entry over its control link. `card.go` draws the status PNG; it is the only thing here that links `x/image`. |
@@ -143,6 +143,14 @@ Notes for agents working on this repo.
   of a relay — it handles SIGTERM, ends each session and waits up to five seconds
   for them to be written down. Everything about shutdown ordering in `node.close`
   exists for that; the tunnel and the log come down after the sessions, not before.
+- A deploy hands sessions on rather than ending them: SIGUSR2, the fd store, the
+  same bytes in the next process (`internal/proxy/handoff.go`, docs/deploy.md).
+  Anything a relay or a tunnel stream holds in memory that a session needs later
+  has to go in the snapshot beside it, or every deploy loses it. A snapshot change
+  an older build would misread bumps `handoffVersion`, and rolling back across one
+  costs a restart. Between a freeze and the new process's READY nothing may be
+  sent to a player, the backend or a peer: a crash in that window restarts from the
+  same snapshot, which is only safe while nothing it describes has moved.
 - A session is keyed by uuid everywhere it is read back, and a client before 1.19
   sends none. The whitelist matched the login to an identity in order to allow it,
   so the login takes that identity onward. A record without one belongs to nobody.

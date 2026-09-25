@@ -43,10 +43,71 @@ go run ./cmd/proxyctl whitelist list       # once deployed: manage the list from
 Commands: `config`, `deploy`, `status`, `uninstall`, `version`, `whitelist`. The
 Discord bot needs one more thing before `deploy`; see docs/discord.md.
 
-A deploy restarts `proxyd` on every node, which disconnects everyone playing. A
-node asked to stop closes its listeners, ends each session, and waits up to five
-seconds for every one to be written down and reported before it goes. So a restart
-costs the players their game and costs the record nothing.
+A deploy replaces `proxyd` on every node without disconnecting anyone; see
+[Deploying under players](#deploying-under-players). `systemctl stop` and
+`systemctl restart` still end every session: a node asked to stop closes its
+listeners, ends each session, and waits up to five seconds for every one to be
+written down and reported before it goes.
+
+## Deploying under players
+
+`proxyctl deploy` puts the new binary beside the running one and, where the running
+`proxyd` reports `handoff ready`, sends it `SIGUSR2` instead of restarting it. The
+old process stops taking connections without closing its listening sockets, gives
+logins already under way two seconds to reach their relay, and stops every relay at
+a byte boundary. It writes down what each one was doing — the bytes it had read and
+not yet written, the tunnel's buffers and sequence numbers, the session — and hands
+that and every socket to systemd's file descriptor store, then exits. systemd starts
+the new binary at once, and it carries on from the same sockets and the same bytes.
+
+Nothing a player can see closes. Their TCP connection is never closed, because
+systemd holds a copy of it throughout; a new connection made in between waits in the
+listener's queue; datagrams from the next hop wait in the UDP socket; and whatever
+the old process never got round to sending, the tunnel's own repair recovers. The
+pause is the time it takes to change processes, a few hundred milliseconds. A
+session is written down and reported once, when it really ends, with every byte of
+it.
+
+The install step prints how it went:
+
+```
+handoff: sessions carried from pid 41822 to 41907
+```
+
+If the new process is not up within three seconds, the script puts the old binary
+back, kills whatever is starting, and starts again: the old binary takes the same
+store back, which it can because the new one lets go of it only once it is ready.
+The deploy then stops with an error rather than moving on to the next node:
+
+```
+handoff: the new proxyd did not come up; putting the old one back
+handoff: rolled back; the previous binary carried the sessions
+```
+
+The tunnel gives up on a stream after five seconds without progress, so a rollback
+that takes longer than that still keeps the players' TCP connections but loses the
+streams behind them, and those players reconnect.
+
+`proxyctl status` prints `active handoff ready` for a node that can hand off. One
+that prints only `active` is running a `proxyd` from before this, or was started
+without the fd store; the next deploy restarts it, disconnecting everyone on it one
+last time, and every deploy after that is a handoff. The unit needs systemd 254 or
+newer for `FileDescriptorStorePreserve=` and `RestartMode=`; every node runs 255 or
+259.
+
+What does not carry over:
+
+- A login that has not reached its relay after two seconds — a slow whitelist
+  lookup, a client that stalls mid-handshake — is cut off, and the player
+  reconnects. So is a server-list ping in progress.
+- A relay whose listener is gone from the new config ends, and its session is
+  written down as ending at the handoff. So does one whose socket did not make it
+  through the store.
+- A snapshot from a newer build than the one taking over is not read: the node
+  starts clean and those sessions end, as in a restart. Rolling back across a
+  change to the snapshot format therefore costs a restart.
+- `probed`, `proxybot` and `triald` are still restarted. None of them carries a
+  player.
 
 ## topology.json
 

@@ -8,9 +8,33 @@ what changed lives in the repo: `topology.json`, `whitelist.txt`, `trial.json` a
 two nat tables. As with v2.3.1, this entry is the only place the change leaves a
 mark.
 
-The session record has changed since, in code that is not deployed yet: the first
-bullets below.
+The session record and the way a deploy replaces `proxyd` have changed since, in
+code that is not deployed yet: the first bullets below.
 
+- **A deploy no longer disconnects anyone.** `proxyctl deploy` sends a running
+  `proxyd` that reports `handoff ready` a `SIGUSR2` instead of restarting it. It stops
+  taking connections without closing a socket, gives logins under way two seconds
+  to reach their relay, halts every relay at a byte boundary, and hands the sockets
+  and a snapshot of every session — bytes read and not yet written, the tunnel's
+  buffers and sequence numbers, the round-trip readings — to systemd's fd store. The
+  new binary takes them back and carries on from the same bytes; a player sees a
+  pause of a few hundred milliseconds, and the session is written down once, when
+  it ends. A new process that is not up in three seconds is replaced by the old
+  binary, which takes the untouched store back, and the deploy stops there. The
+  unit is now `Type=notify` with an fd store, restarts in 100 ms rather than 2 s,
+  and may use `AF_UNIX` to reach its notify socket. The first deploy of this build
+  restarts every node, disconnecting everyone one last time; `proxyctl status`
+  shows `handoff ready` for a node the next deploy can hand off. See
+  docs/deploy.md#deploying-under-players.
+- **Relays copy through their own buffer.** Between two TCP connections `io.Copy`
+  reached `splice(2)`, and an interrupted splice loses the bytes it already took
+  off the source, so a handoff could not have said where a direct route stopped.
+  At Minecraft's rates the copy costs nothing measurable.
+- **The exit dials only once a stream's first chunk is in.** A restarted exit used
+  to dial the backend for the next chunk of every session it had been carrying,
+  from the egress address, with the middle of an encrypted stream. A stream now
+  opens on chunk 0; one whose start nobody can supply is reset when its repair
+  window runs out.
 - **Every session records the player's own leg.** The entry reads the client
   connection's `TCP_INFO` every five seconds and once more as it ends: the lowest
   round trip the kernel saw, the median, p90 and worst of its smoothed round trip,

@@ -16,9 +16,13 @@ one that dials the target is an exit; anything else passes bytes along. A second
 ingress is one more listener, not a code change.
 
 The ingress parses exactly one packet — the handshake — rewrites the address to what
-the backend expects, then relays raw bytes: `splice(2)` on a TCP route, numbered
+the backend expects, then relays raw bytes: as they are on a TCP route, as numbered
 chunks on a UDP one. It cannot do more: the client encrypts from Encryption Response
 onward.
+
+A deploy does not disconnect anyone. The running `proxyd` hands its sockets and
+every session's state to systemd's fd store and the new binary carries on from the
+same bytes. See docs/deploy.md#deploying-under-players.
 
 A server-list ping is the exception: the ingress answers it itself and never opens
 the chain for one. See docs/whitelist.md#server-list.
