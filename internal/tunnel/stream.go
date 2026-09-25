@@ -19,6 +19,9 @@ var (
 	ErrUnrepairable = errors.New("tunnel: stream is missing data no hop can still supply")
 	ErrReset        = errors.New("tunnel: reset by peer")
 	ErrClosed       = errors.New("tunnel: stream closed")
+	// ErrHalted is what a stream's reader and writer get once it is halted for a
+	// handoff: not an ending, only a point at which this process stops.
+	ErrHalted = errors.New("tunnel: stream halted for a handoff")
 )
 
 const (
@@ -114,8 +117,12 @@ func (d *dir) write(p []byte) (int, error) {
 	for len(p) > 0 {
 		take := min(len(p), opt.maxChunk)
 		d.mu.Lock()
-		for d.bufSize >= opt.Window && d.err == nil {
+		for d.bufSize >= opt.Window && d.err == nil && !d.s.held() {
 			d.cond.Wait()
+		}
+		if d.s.held() {
+			d.mu.Unlock()
+			return total, ErrHalted
 		}
 		if d.err != nil {
 			err := d.err
@@ -142,6 +149,10 @@ func (d *dir) write(p []byte) (int, error) {
 // arrives after everything before it and never ahead of a retransmission.
 func (d *dir) finish() error {
 	d.mu.Lock()
+	if d.s.held() {
+		d.mu.Unlock()
+		return ErrHalted
+	}
 	if d.err != nil {
 		err := d.err
 		d.mu.Unlock()
@@ -277,6 +288,11 @@ func (d *dir) read(p []byte) (int, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for {
+		// Ahead of anything buffered: what has not been read yet stays where it
+		// is, and goes with the rest of the stream to whoever carries on.
+		if d.s.held() {
+			return 0, ErrHalted
+		}
 		if len(d.head) > 0 {
 			n := copy(p, d.head)
 			d.head = d.head[n:]
@@ -535,6 +551,8 @@ type Stream struct {
 
 	// offered is set once the exit has handed the stream to Accept. See offer.
 	offered atomic.Bool
+	// halted is set by Halt. See held.
+	halted atomic.Bool
 
 	mu       sync.Mutex
 	lastSeen time.Time
@@ -587,6 +605,9 @@ func (s *Stream) CloseWrite() error {
 // already saw the FIN in order, and a reset racing a retransmission would truncate
 // it. State lingers either way so a late NACK still finds an answer.
 func (s *Stream) Close() error {
+	if s.held() {
+		return nil // the stream is not ending, only leaving this process
+	}
 	reset := false
 	if s.rx != nil {
 		s.rx.mu.Lock()
@@ -606,6 +627,28 @@ func (s *Stream) abort(err error) {
 	s.down.abort(err)
 	s.up.abort(err)
 	s.n.close(s, err != ErrReset)
+}
+
+// Halt stops whoever is reading or writing the stream, for good, without ending
+// it: Read, Write and CloseWrite return ErrHalted from now on, and Close does
+// nothing. The tunnel carries on repairing and acknowledging underneath until
+// the node itself is frozen. It is the first half of a handoff, which has to
+// stop the layer above from touching a stream before the stream's state can be
+// written down; see Node.Freeze.
+func (s *Stream) Halt() {
+	s.halted.Store(true)
+	s.down.wake()
+	s.up.wake()
+}
+
+// held reports whether the stream has stopped here: halted itself, or on a node
+// that is frozen.
+func (s *Stream) held() bool { return s.halted.Load() || s.n.frozen.Load() }
+
+func (d *dir) wake() {
+	d.mu.Lock()
+	d.cond.Broadcast()
+	d.mu.Unlock()
 }
 
 func (s *Stream) progress() string {

@@ -33,7 +33,10 @@ type Link struct {
 	// down says which side of the node this link hangs off: true toward the exit,
 	// false toward the entry. It is what tells a datagram's direction from the
 	// socket it arrived on, so nothing on the wire has to carry one.
-	down   bool
+	down bool
+	// addr is the leg as the config names it, which is how a resumed node finds
+	// what its predecessor learned about the same leg.
+	addr   string
 	seal   *Sealer
 	remote atomic.Pointer[net.UDPAddr]
 	// wasUp is touched only by the node's timer goroutine, to log transitions.
@@ -96,6 +99,9 @@ func (l *Link) sample(r time.Duration) {
 // is not waste: identical bytes would look like a replay to the far end and the
 // second copy would be discarded, which is exactly what duplication must not do.
 func (l *Link) send(plain []byte, n int, rtx bool) int {
+	if l.sock.node.frozen.Load() {
+		return 0 // the state that would have sent this is on its way to another process
+	}
 	to := l.remote.Load()
 	if to == nil {
 		return 0 // a peer that has never spoken has no address to answer at
@@ -203,12 +209,13 @@ func (s *socket) candidates(from *net.UDPAddr) []*Link {
 }
 
 func (s *socket) read() {
+	defer s.node.wg.Done()
 	buf := make([]byte, 65535)
 	plain := make([]byte, 0, 65535)
 	for {
 		n, from, err := s.conn.ReadFromUDP(buf)
 		if err != nil {
-			if s.node.stopped() {
+			if s.node.stopped() || s.node.frozen.Load() {
 				return
 			}
 			// A closed socket ends the loop; anything else is one bad datagram.

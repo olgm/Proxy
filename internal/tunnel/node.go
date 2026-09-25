@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -114,6 +115,10 @@ type Options struct {
 	Idle        time.Duration
 	Timers      Timers
 
+	// Resume carries on from a node frozen in another process instead of
+	// starting clean. See Freeze.
+	Resume *Resume
+
 	maxChunk int
 }
 
@@ -132,6 +137,13 @@ type Node struct {
 
 	stop     chan struct{}
 	stopOnce sync.Once
+
+	// frozen is set by Freeze, and from then on the node neither reads nor sends
+	// anything, and nothing about a stream changes. thaw is closed with it, to
+	// end the goroutines that do the reading and the timing; wg counts them.
+	frozen atomic.Bool
+	thaw   chan struct{}
+	wg     sync.WaitGroup
 
 	// lastUp is the last tick at which any link had answered a ping. Touched only
 	// by the timer goroutine.
@@ -174,16 +186,22 @@ func New(opt Options) (*Node, error) {
 
 	n := &Node{opt: opt, accept: make(chan *Stream, acceptBacklog),
 		streams: map[uint64]*Stream{}, stop: make(chan struct{}), lastUp: time.Now(),
-		echoAt: map[uint64]time.Time{}}
+		echoAt: map[uint64]time.Time{}, thaw: make(chan struct{})}
+	var from Sockets
+	if opt.Resume != nil {
+		from = opt.Resume.Sockets
+	}
 
 	if len(opt.Peers) > 0 {
-		addr, err := net.ResolveUDPAddr("udp", opt.Bind)
-		if err != nil {
-			return nil, fmt.Errorf("tunnel: bind %s: %w", opt.Bind, err)
-		}
-		conn, err := net.ListenUDP("udp", addr)
-		if err != nil {
-			return nil, err
+		conn := from.Bound
+		if conn == nil {
+			addr, err := net.ResolveUDPAddr("udp", opt.Bind)
+			if err != nil {
+				return nil, fmt.Errorf("tunnel: bind %s: %w", opt.Bind, err)
+			}
+			if conn, err = net.ListenUDP("udp", addr); err != nil {
+				return nil, err
+			}
 		}
 		sock := &socket{conn: conn, node: n}
 		for _, p := range opt.Peers {
@@ -201,9 +219,15 @@ func New(opt Options) (*Node, error) {
 		n.socks = append(n.socks, sock)
 	}
 	if len(opt.Hops) > 0 {
-		conn, err := net.ListenUDP("udp", &net.UDPAddr{})
-		if err != nil {
-			return nil, err
+		// The same socket a frozen node dialled from, where there is one: its port
+		// is the address every hop has learned to answer, and a new one would
+		// leave them answering nobody until the next ping.
+		conn := from.Dial
+		if conn == nil {
+			var err error
+			if conn, err = net.ListenUDP("udp", &net.UDPAddr{}); err != nil {
+				return nil, err
+			}
 		}
 		sock := &socket{conn: conn, node: n}
 		for _, h := range opt.Hops {
@@ -226,10 +250,18 @@ func New(opt Options) (*Node, error) {
 		n.socks = append(n.socks, sock)
 	}
 
+	if opt.Resume != nil {
+		n.resume(opt.Resume)
+	}
 	for _, s := range n.socks {
+		n.wg.Add(1)
 		go s.read()
 	}
+	n.wg.Add(1)
 	go n.timers()
+	if opt.Resume != nil {
+		n.settle(opt.Resume.Attached)
+	}
 	return n, nil
 }
 
@@ -242,7 +274,7 @@ func newLink(s *socket, ip netip.Addr, port int, c LinkConfig, down bool) (*Link
 	if dup < 1 {
 		dup = 1
 	}
-	return &Link{sock: s, ip: ip, port: port, dup: dup, down: down, seal: seal}, nil
+	return &Link{sock: s, ip: ip, port: port, dup: dup, down: down, seal: seal, addr: c.Addr}, nil
 }
 
 // Open starts a stream. Only a node with hops can: the entry is the one end that
@@ -250,6 +282,9 @@ func newLink(s *socket, ip netip.Addr, port int, c LinkConfig, down bool) (*Link
 func (n *Node) Open() (*Stream, error) {
 	if len(n.down) == 0 {
 		return nil, errors.New("tunnel: node has no hops to open a stream on")
+	}
+	if n.frozen.Load() {
+		return nil, ErrClosed
 	}
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -269,6 +304,8 @@ func (n *Node) Accept() (*Stream, error) {
 	case s := <-n.accept:
 		return s, nil
 	case <-n.stop:
+		return nil, ErrClosed
+	case <-n.thaw:
 		return nil, ErrClosed
 	}
 }
@@ -464,6 +501,7 @@ func (n *Node) live() []*Stream {
 }
 
 func (n *Node) timers() {
+	defer n.wg.Done()
 	tick := time.NewTicker(n.opt.Timers.Tick)
 	ping := time.NewTicker(n.opt.Timers.Ping)
 	sweep := time.NewTicker(sweepEvery)
@@ -477,6 +515,8 @@ func (n *Node) timers() {
 	for {
 		select {
 		case <-n.stop:
+			return
+		case <-n.thaw:
 			return
 		case now := <-tick.C:
 			dead := n.silent(now)

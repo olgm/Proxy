@@ -131,6 +131,28 @@ those errors, so a fleet-wide drop could not be charged to the backend or to tra
 see the 2026-09-14 08:06:27Z incident, where the distinction had to be inferred from
 how quickly reconnects succeeded.
 
+## Handoff
+
+A node can be frozen in one process and resumed in the next without the chain
+noticing (`handoff.go`). The sockets move as they are, so no neighbour sees a port,
+address or key change, and so does everything a socket does not hold: every
+stream's buffers, sequence numbers and round trips, each leg's learned address and
+replay window. What arrives in between waits in the socket; what the old process
+never sent is found by the HEAD advert the new one sends at once, and by NACKs.
+
+- **Halt before freeze.** `Stream.Halt` stops the layer above at a byte boundary:
+  Read, Write and CloseWrite return `ErrHalted`, Close does nothing. Only once
+  nothing above is touching a stream does `Node.Freeze` stop the readers and the
+  timers and write the state down. From then on the node sends nothing at all.
+- **The seal does not move.** The new process starts a fresh epoch, as any restart
+  does; carrying the counter would make every nonce's uniqueness depend on the
+  freeze having stopped every sender first. Peers already treat a new epoch as a
+  restart.
+- **Streams nobody claims are settled, not dropped.** `Resume.Attached` names the
+  streams the layer above carries on with. At the exit the rest are offered to
+  `Accept` again — they were frozen before anyone dialled — and at the entry they
+  are reset, since nothing is left to write them.
+
 ## Testing
 
 `tunnel_test.go` puts a UDP relay between real sockets and drops datagrams on demand,
