@@ -81,8 +81,11 @@ someone intervenes, where it used to be every two seconds. If the new process is
 not up within three seconds of the old one leaving, the script puts the old
 binary and the old `config.json` back, kills whatever is starting, and starts
 again: the old binary takes the same store back, which it can because the new one
-lets go of it only once it is ready. The deploy then stops with an error rather
-than moving on to the next node:
+lets go of it only once it is ready. The one exception is a listening socket the
+new config no longer names, which the new process closes before it binds its own
+ports; the old binary listens afresh on that port, and the sessions that came in
+on it are still in the store. The deploy then stops with an error rather than
+moving on to the next node:
 
 ```
 handoff: the new proxyd did not come up; putting the old one back

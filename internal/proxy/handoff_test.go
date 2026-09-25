@@ -537,3 +537,85 @@ func sharedPort(t *testing.T) string {
 	t.Fatal("no port free for both TCP and UDP")
 	return ""
 }
+
+// fdStore stands in for systemd's store: it keeps its own copy of everything a
+// handoff stores, gives each process that starts from it copies of its own, and
+// closes what a start drops.
+type fdStore struct {
+	t     *testing.T
+	snap  []byte
+	files map[string]*os.File
+}
+
+func newFDStore(t *testing.T) *fdStore {
+	st := &fdStore{t: t, files: map[string]*os.File{}}
+	t.Cleanup(func() {
+		for _, f := range st.files {
+			f.Close()
+		}
+	})
+	return st
+}
+
+func (st *fdStore) keep(snap []byte, files []handoff.File) error {
+	st.snap = snap
+	for _, f := range files {
+		st.files[f.Name] = dupFile(st.t, f.File)
+	}
+	return nil
+}
+
+func (st *fdStore) start() *inherited {
+	var dup []handoff.File
+	for name, f := range st.files {
+		dup = append(dup, handoff.File{Name: name, File: dupFile(st.t, f)})
+	}
+	in := readInherited(handoff.NewInherited(st.snap, dup))
+	in.drop = func(names []string) {
+		for _, name := range names {
+			if f := st.files[name]; f != nil {
+				f.Close()
+				delete(st.files, name)
+			}
+		}
+	}
+	return in
+}
+
+// A new process that renames a listener lets the old listening socket go at once,
+// since it is in the way of nothing but may be in the way of a bind. The sessions
+// that came in on it stay in the store until the node is ready: one that fails
+// first is rolled back, and the old binary carries them on.
+func TestRollbackCarriesTheSessionsOfARenamedListener(t *testing.T) {
+	useMojang(t, nil)
+	backend, _ := echoBackend(t)
+	listener := func(bind string) *Config {
+		return &Config{Name: "ch", Listeners: []Listener{{Bind: bind, Upstream: backend,
+			Minecraft: &Minecraft{RewriteHost: "mc.example.com", RewritePort: 25565}}}}
+	}
+	addr := sharedPort(t)
+	old := listener(addr)
+	n := mustStart(t, old)
+	p := play(t, addr)
+	p.flowing(t)
+
+	store := newFDStore(t)
+	if err := n.handoff(store.keep); err != nil {
+		t.Fatal(err)
+	}
+	// The new build names the listener differently, and then dies before READY.
+	renamed, _, err := build(listener("127.0.0.1:0"), store.start())
+	if err != nil {
+		t.Fatalf("the new build could not start: %v", err)
+	}
+	renamed.close()
+	// The old binary and config go back and take the same store.
+	back, resumes, err := build(old, store.start())
+	if err != nil {
+		t.Fatalf("the rollback could not start: %v", err)
+	}
+	back.serve(resumes)
+	defer back.close()
+	p.flowing(t)
+	p.finish(t)
+}

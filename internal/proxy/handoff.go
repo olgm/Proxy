@@ -352,36 +352,37 @@ func readInherited(from *handoff.Inherited) *inherited {
 // whether it is TCP or UDP, since one of each may share a bind.
 func listenerKey(network, bind string) string { return network + " " + bind }
 
-// prune lets go of every inherited socket the new config will not take, before
-// anything is bound. A listener left in the store keeps its port, so a node that
-// cannot read the snapshot, or whose config names a listener differently now,
-// would otherwise fail to bind and crash again on every restart. The snapshot
-// itself stays in the store until the node is ready: a crash before then starts
-// from it again.
+// prune lets go of every inherited listening socket the new config will not take,
+// before anything is bound. A listener left in the store keeps its port, so a node
+// that cannot read the snapshot, or whose config names a listener differently now,
+// would otherwise fail to bind and crash again on every restart. Nothing else goes
+// early: a connection the config has no use for is closed once build is done and
+// leaves the store with everything else when the node is ready, so a start that
+// fails before then leaves it, and its session, to whichever process comes next.
+// The snapshot stays until then too. Without a snapshot there is no telling a
+// listener from a connection, and all of it goes now.
 func (in *inherited) prune(cfg *Config) {
 	if in == nil {
 		return
 	}
 	keep := map[string]bool{}
-	binds := map[string]bool{}
 	for _, l := range cfg.Listeners {
-		key := listenerKey(l.Network(), l.Bind)
-		binds[key] = true
-		if ls := in.binds[key]; ls != nil {
-			keep[ls.TCP], keep[ls.Bound], keep[ls.Dial] = true, true, true
+		if ls := in.binds[listenerKey(l.Network(), l.Bind)]; ls != nil {
+			keep[ls.TCP], keep[ls.Bound] = true, true
 		}
 	}
 	if cfg.Control != nil && cfg.Control.Bind == in.snap.ControlBind {
 		keep[in.snap.Control] = true
 	}
-	for _, rs := range in.snap.Relays {
-		if binds[listenerKey(rs.Net, rs.Bind)] {
-			keep[rs.A.FD], keep[rs.B.FD] = true, true
-		}
+	listening := map[string]bool{in.snap.Control: true}
+	for _, ls := range in.snap.Listeners {
+		listening[ls.TCP], listening[ls.Bound] = true, true
 	}
+	// Version is 0 only where readInherited found no snapshot it could use.
+	blind := in.snap.Version == 0
 	var gone []string
 	for _, name := range in.from.Names() {
-		if keep[name] {
+		if keep[name] || !blind && !listening[name] {
 			continue
 		}
 		f := in.from.File(name)
