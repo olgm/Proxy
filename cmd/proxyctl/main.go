@@ -1798,7 +1798,7 @@ $SUDO rm -f /etc/systemd/system/proxybot.service /usr/local/bin/proxybot /etc/pr
 		out, err := ssh(node.SSH, fmt.Sprintf(`set -u
 SUDO="%s"
 $SUDO systemctl disable --now proxyd >/dev/null 2>&1 || true
-$SUDO rm -f /etc/systemd/system/proxyd.service /usr/local/bin/proxyd /usr/local/bin/proxyd.prev /usr/local/bin/proxyd.next /etc/proxyd/config.json
+$SUDO rm -f /etc/systemd/system/proxyd.service /usr/local/bin/proxyd /usr/local/bin/proxyd.prev /usr/local/bin/proxyd.next /etc/proxyd/config.json /etc/proxyd/config.json.prev
 %s
 %s
 $SUDO rmdir /etc/proxyd 2>/dev/null || true
