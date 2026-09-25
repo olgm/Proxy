@@ -74,10 +74,13 @@ The install step prints how it went:
 handoff: sessions carried from pid 41822 to 41907
 ```
 
-If the new process is not up within three seconds, the script puts the old binary
-back, kills whatever is starting, and starts again: the old binary takes the same
-store back, which it can because the new one lets go of it only once it is ready.
-The deploy then stops with an error rather than moving on to the next node:
+The script starts the new process itself the moment the old one has gone, rather
+than waiting out the unit's two-second `RestartSec`, which is there for a crash
+loop. If the new process is not up within three seconds, the script puts the old
+binary and the old `config.json` back, kills whatever is starting, and starts
+again: the old binary takes the same store back, which it can because the new one
+lets go of it only once it is ready. The deploy then stops with an error rather
+than moving on to the next node:
 
 ```
 handoff: the new proxyd did not come up; putting the old one back
@@ -86,7 +89,11 @@ handoff: rolled back; the previous binary carried the sessions
 
 The tunnel gives up on a stream after five seconds without progress, so a rollback
 that takes longer than that still keeps the players' TCP connections but loses the
-streams behind them, and those players reconnect.
+streams behind them, and those players reconnect. A new process that turns ready
+in the instant between the script's last look and its kill is killed with the
+sessions it had just taken; three seconds late makes that rare. An old process
+that takes the signal and does not go within six seconds is left running, with
+the old binary and config put back.
 
 `proxyctl status` prints `active handoff ready` for a node that can hand off. One
 that prints only `active` is running a `proxyd` from before this, or was started
@@ -99,13 +106,19 @@ What does not carry over:
 
 - A login that has not reached its relay after two seconds — a slow whitelist
   lookup, a client that stalls mid-handshake — is cut off, and the player
-  reconnects. So is a server-list ping in progress.
+  reconnects. So is a server-list ping in progress. At the exit, a dial to the
+  backend still under way then is closed unused, and the next process dials
+  again: one connect-and-close from the egress address, which the two-second
+  wait almost always avoids.
 - A relay whose listener is gone from the new config ends, and its session is
   written down as ending at the handoff. So does one whose socket did not make it
   through the store.
-- A snapshot from a newer build than the one taking over is not read: the node
-  starts clean and those sessions end, as in a restart. Rolling back across a
-  change to the snapshot format therefore costs a restart.
+- A snapshot from a newer build than the one taking over, or one that cannot be
+  read, is not used: the node lets go of every socket in the store, starts clean
+  on the same ports, and those sessions end, as in a restart. Rolling back across
+  a change to the snapshot format therefore costs a restart. So does renaming a
+  listener's `bind`, even to the same address in another spelling: sockets are
+  matched to the config by that string.
 - `probed`, `proxybot` and `triald` are still restarted. None of them carries a
   player.
 

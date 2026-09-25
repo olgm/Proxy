@@ -20,9 +20,11 @@ code that is not deployed yet: the first bullets below.
   new binary takes them back and carries on from the same bytes; a player sees a
   pause of a few hundred milliseconds, and the session is written down once, when
   it ends. A new process that is not up in three seconds is replaced by the old
-  binary, which takes the untouched store back, and the deploy stops there. The
-  unit is now `Type=notify` with an fd store, restarts in 100 ms rather than 2 s,
-  and may use `AF_UNIX` to reach its notify socket. The first deploy of this build
+  binary and config, which take the untouched store back, and the deploy stops
+  there. The unit is now `Type=notify` with an fd store kept through a failed
+  state, and may use `AF_UNIX` to reach its notify socket; the script starts the
+  new process itself rather than waiting out `RestartSec`, which stays at 2 s for
+  crash loops. The first deploy of this build
   restarts every node, disconnecting everyone one last time; `proxyctl status`
   shows `handoff ready` for a node the next deploy can hand off. See
   docs/deploy.md#deploying-under-players.

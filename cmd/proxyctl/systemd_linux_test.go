@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -68,8 +69,43 @@ func TestDeployUnderRealSystemd(t *testing.T) {
 	c.Write(append(hs, 0x07, 0x00, 0x05, 'N', 'o', 't', 'c', 'h'))
 	echoes(t, c, "first")
 
-	if out := install(bin); !strings.Contains(out, "handoff: sessions carried") {
+	// Echo one byte at a time through the handoff and keep the longest wait: that
+	// is the pause a player sits through. The unit's RestartSec is two seconds,
+	// so a pause under that says the script started the new process itself.
+	stop, longest, broke := make(chan struct{}), make(chan time.Duration, 1), make(chan error, 1)
+	go func() {
+		var worst time.Duration
+		for {
+			select {
+			case <-stop:
+				longest <- worst
+				return
+			default:
+			}
+			start := time.Now()
+			if err := echo(c, "x"); err != nil {
+				broke <- err
+				longest <- worst
+				return
+			}
+			worst = max(worst, time.Since(start))
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	out := install(bin)
+	close(stop)
+	pause := <-longest
+	select {
+	case err := <-broke:
+		t.Fatalf("the connection broke during the handoff: %v", err)
+	default:
+	}
+	if !strings.Contains(out, "handoff: sessions carried") {
 		t.Fatalf("the second deploy did not hand off")
+	}
+	t.Logf("longest pause through the handoff: %s", pause)
+	if pause > 1500*time.Millisecond {
+		t.Fatalf("players waited %s through a handoff", pause)
 	}
 	echoes(t, c, "second")
 
@@ -82,8 +118,8 @@ func TestDeployUnderRealSystemd(t *testing.T) {
 	if got := statusText(); got != "handoff ready" {
 		t.Fatalf("after the rollback the status is %q", got)
 	}
-	out, _ := exec.Command("journalctl", "-u", "proxyd", "--no-pager", "-o", "cat").CombinedOutput()
-	t.Logf("journal:\n%s", out)
+	journal, _ := exec.Command("journalctl", "-u", "proxyd", "--no-pager", "-o", "cat").CombinedOutput()
+	t.Logf("journal:\n%s", journal)
 }
 
 func statusText() string {
@@ -93,14 +129,21 @@ func statusText() string {
 
 func echoes(t *testing.T, c net.Conn, msg string) {
 	t.Helper()
+	if err := echo(c, msg); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func echo(c net.Conn, msg string) error {
 	if _, err := c.Write([]byte(msg)); err != nil {
-		t.Fatalf("write %q: %v", msg, err)
+		return fmt.Errorf("write %q: %w", msg, err)
 	}
 	c.SetReadDeadline(time.Now().Add(15 * time.Second))
 	got := make([]byte, len(msg))
 	if _, err := io.ReadFull(c, got); err != nil || string(got) != msg {
-		t.Fatalf("sent %q, got %q: %v", msg, got, err)
+		return fmt.Errorf("sent %q, got %q: %v", msg, got, err)
 	}
+	return nil
 }
 
 func waitFor(t *testing.T, what string, cond func() bool) {

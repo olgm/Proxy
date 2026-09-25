@@ -1390,10 +1390,10 @@ func lastLines(b []byte, n int) string {
 // says "handoff ready" was started with an fd store and knows how to use it, so
 // the new binary goes in and the old process gets SIGUSR2: it hands every socket
 // and session to systemd and exits, and the new one carries on from them. If the
-// new one is not up within three seconds the old binary goes back and takes the
-// same store, which it can, because the new one never let go of it. Anything
-// older is restarted, which ends every session — the first deploy onto this
-// model is the last one that does.
+// new one is not up within three seconds the old binary and its config go back
+// and take the same store, which they can, because the new one never let go of
+// it. Anything older is restarted, which ends every session — the first deploy
+// onto this model is the last one that does.
 func installScript(user string, root, whitelist, motd bool, feeds string) string {
 	sudo := "sudo -n"
 	if root {
@@ -1425,6 +1425,7 @@ id -u "$USER" >/dev/null 2>&1 || \
 
 $SUDO install -m 0755 /tmp/proxyd.new /usr/local/bin/proxyd.next
 $SUDO install -d -m 0755 /etc/proxyd
+[ ! -f /etc/proxyd/config.json ] || $SUDO cp -p /etc/proxyd/config.json /etc/proxyd/config.json.prev
 $SUDO install -m 0640 -o root -g "$USER" /tmp/proxyd.config.json /etc/proxyd/config.json
 $SUDO install -d -m 0750 -o "$USER" -g "$USER" %s
 %s
@@ -1445,7 +1446,7 @@ EnvironmentFile=-/etc/proxyd/feeds.env
 ExecStart=/usr/local/bin/proxyd -c /etc/proxyd/config.json
 Restart=always
 RestartMode=direct
-RestartSec=100ms
+RestartSec=2
 FileDescriptorStoreMax=8192
 FileDescriptorStorePreserve=yes
 TimeoutStopSec=15
@@ -1468,16 +1469,28 @@ $SUDO systemctl daemon-reload
 $SUDO systemctl enable proxyd >/dev/null 2>&1
 
 %s$SUDO systemctl is-active proxyd
-`, sudo, user, whitelistDir, seed, envFile("/etc/proxyd/feeds.env", `"$USER"`, feeds), user, swapScript("/usr/local/bin"))
+`, sudo, user, whitelistDir, seed, envFile("/etc/proxyd/feeds.env", `"$USER"`, feeds), user, swapScript("/usr/local/bin", "/etc/proxyd"))
 }
 
 // swapScript puts proxyd.next in bin in place of the running proxyd: by handoff
 // where the running one says it can take part in one, by restart where it
-// cannot. It exits 1 if a handoff fails, after putting the old binary back.
-func swapScript(bin string) string {
-	return strings.ReplaceAll(`
-# up OLD: a process other than OLD is the main one and has said it is ready,
-# which under Type=notify is what "active" means.
+// cannot. It exits 1 if a handoff fails, after putting the old binary and the old
+// config in etc back.
+//
+// The new process is started by hand the moment the old one has gone, rather
+// than after the unit's RestartSec: that delay is for a crash loop, and a handoff
+// is a pause every player on the node sits through.
+func swapScript(bin, etc string) string {
+	return strings.NewReplacer("@BIN@", bin, "@ETC@", etc).Replace(`
+# gone OLD: OLD is no longer the main process. up OLD: another one is, and has
+# said it is ready, which under Type=notify is what "active" means.
+gone() {
+  for _ in $(seq 1 60); do
+    [ "$(systemctl show -p MainPID --value proxyd)" != "$1" ] && return 0
+    sleep 0.1
+  done
+  return 1
+}
 up() {
   for _ in $(seq 1 30); do
     PID=$(systemctl show -p MainPID --value proxyd)
@@ -1488,6 +1501,10 @@ up() {
   done
   return 1
 }
+restore() {
+  $SUDO mv -f @BIN@/proxyd.prev @BIN@/proxyd
+  [ ! -f @ETC@/config.json.prev ] || $SUDO mv -f @ETC@/config.json.prev @ETC@/config.json
+}
 
 OLD=$(systemctl show -p MainPID --value proxyd 2>/dev/null || echo 0)
 if [ "$(systemctl is-active proxyd 2>/dev/null)" = active ] &&
@@ -1495,23 +1512,29 @@ if [ "$(systemctl is-active proxyd 2>/dev/null)" = active ] &&
   $SUDO cp -p @BIN@/proxyd @BIN@/proxyd.prev
   $SUDO mv -f @BIN@/proxyd.next @BIN@/proxyd
   $SUDO kill -USR2 "$OLD"
+  # The old process lets logins under way finish first, up to two seconds of
+  # the six, and relays carry on meanwhile; only then does it hand off and go.
+  if ! gone "$OLD"; then
+    restore
+    echo "handoff: the old proxyd never handed off, and is still running"
+    exit 1
+  fi
+  $SUDO systemctl start --no-block proxyd
   if up "$OLD"; then
     echo "handoff: sessions carried from pid $OLD to $(systemctl show -p MainPID --value proxyd)"
   else
     NEW=$(systemctl show -p MainPID --value proxyd)
-    if [ "$NEW" != "$OLD" ] && [ "$NEW" != 0 ] && [ "$(systemctl is-active proxyd)" = active ]; then
+    if [ "$NEW" != 0 ] && [ "$(systemctl is-active proxyd)" = active ]; then
       # Up after all, only late, and holding the sessions: leave it be.
       echo "handoff: sessions carried from pid $OLD to $NEW, late"
-    elif [ "$NEW" = "$OLD" ]; then
-      $SUDO mv -f @BIN@/proxyd.prev @BIN@/proxyd
-      echo "handoff: the old proxyd never handed off, and is still running"
-      exit 1
     else
       # A new process lets go of the store only once it is ready, and the unit
       # keeps the store even through a failed state, so the old binary can take
-      # it all back: put it in place, stop whatever is starting, start again.
+      # it all back: put it and its config in place, stop whatever is starting,
+      # start again. A process that turns ready between the check above and the
+      # kill below is lost with its sessions; three seconds late makes that rare.
       echo "handoff: the new proxyd did not come up; putting the old one back"
-      $SUDO mv -f @BIN@/proxyd.prev @BIN@/proxyd
+      restore
       [ "$NEW" = 0 ] || $SUDO kill -KILL "$NEW" 2>/dev/null || true
       $SUDO systemctl reset-failed proxyd 2>/dev/null || true
       $SUDO systemctl start --no-block proxyd
@@ -1529,7 +1552,7 @@ else
   $SUDO systemctl restart proxyd
   sleep 1
 fi
-`, "@BIN@", bin)
+`)
 }
 
 // envFile writes a service's feed variables, or removes the file when there are

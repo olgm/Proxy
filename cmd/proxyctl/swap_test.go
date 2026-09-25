@@ -27,6 +27,9 @@ func newFakeNode(t *testing.T, status, onUSR2, onStart string) *fakeNode {
 	}
 	write("bin/proxyd", "old", 0o644)
 	write("bin/proxyd.next", "new", 0o644)
+	os.MkdirAll(filepath.Join(dir, "etc"), 0o755)
+	write("etc/config.json", "new config", 0o644)
+	write("etc/config.json.prev", "old config", 0o644)
 	write("pid", "100", 0o644)
 	write("active", "active", 0o644)
 	write("status", status, 0o644)
@@ -58,7 +61,7 @@ esac
 // is looked up on PATH rather than being the shell's own.
 func (f *fakeNode) run(t *testing.T) (string, error) {
 	t.Helper()
-	cmd := exec.Command("bash", "-c", "set -eu\nSUDO=env\n"+swapScript(f.bin))
+	cmd := exec.Command("bash", "-c", "set -eu\nSUDO=env\n"+swapScript(f.bin, filepath.Join(f.dir, "etc")))
 	cmd.Env = append(os.Environ(), "PATH="+filepath.Join(f.dir, "path")+":"+os.Getenv("PATH"))
 	out, err := cmd.CombinedOutput()
 	return string(out), err
@@ -89,12 +92,15 @@ func TestSwapHandsOffToANewProcess(t *testing.T) {
 	}
 }
 
-// A new proxyd that never comes up is killed, the old binary goes back, and the
-// old binary takes the store back. The deploy fails, so it goes no further.
+// A new proxyd that never comes up is killed, the old binary and its config go
+// back, and the old binary takes the store back. The deploy fails, so it goes no
+// further.
 func TestSwapRollsBackWhenTheNewProcessDoesNotComeUp(t *testing.T) {
+	// The first start is the one the script kicks off at once; the new binary
+	// never gets to ready. The second, after the rollback, is the old binary.
 	f := newFakeNode(t, "handoff ready",
 		`echo 101 > $D/pid; echo activating > $D/active`,
-		`echo 102 > $D/pid; echo active > $D/active`)
+		`if [ -f $D/kicked ]; then echo 102 > $D/pid; echo active > $D/active; else touch $D/kicked; fi`)
 	out, err := f.run(t)
 	if err == nil {
 		t.Fatalf("a failed handoff did not fail the deploy:\n%s", out)
@@ -102,12 +108,39 @@ func TestSwapRollsBackWhenTheNewProcessDoesNotComeUp(t *testing.T) {
 	if !strings.Contains(out, "rolled back; the previous binary carried the sessions") {
 		t.Fatalf("output:\n%s", out)
 	}
-	if f.read(t, "bin/proxyd") != "old" {
-		t.Fatal("the old binary was not put back")
+	if f.read(t, "bin/proxyd") != "old" || f.read(t, "etc/config.json") != "old config" {
+		t.Fatal("the old binary and config were not put back")
 	}
 	log := f.read(t, "log")
 	if !strings.Contains(log, "kill -KILL 101") || !strings.Contains(log, "systemctl start --no-block proxyd") {
 		t.Fatalf("the stuck process was not replaced:\n%s", log)
+	}
+}
+
+// A proxyd that takes SIGUSR2 and does not go — it had no store to hand off to —
+// is left running, and the files it was started from go back.
+func TestSwapLeavesAnOldProxydThatDidNotHandOff(t *testing.T) {
+	f := newFakeNode(t, "handoff ready", ":", ":")
+	out, err := f.run(t)
+	if err == nil || !strings.Contains(out, "never handed off, and is still running") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if f.read(t, "bin/proxyd") != "old" || f.read(t, "etc/config.json") != "old config" {
+		t.Fatal("the old binary and config were not put back")
+	}
+	if log := f.read(t, "log"); strings.Contains(log, "KILL") || strings.Contains(log, "start") {
+		t.Fatalf("a running proxyd was disturbed:\n%s", log)
+	}
+}
+
+// The new process is started at once when the old one goes, not after the
+// unit's two-second crash-loop delay.
+func TestSwapStartsTheNewProcessAtOnce(t *testing.T) {
+	f := newFakeNode(t, "handoff ready", `echo 0 > $D/pid; echo activating > $D/active`,
+		`echo 101 > $D/pid; echo active > $D/active`)
+	out, err := f.run(t)
+	if err != nil || !strings.Contains(out, "sessions carried from pid 100 to 101") {
+		t.Fatalf("%v\n%s", err, out)
 	}
 }
 
@@ -134,7 +167,7 @@ func TestUnitAllowsAHandoff(t *testing.T) {
 	script := installScript("proxyd", true, false, false, "")
 	for _, want := range []string{
 		"Type=notify", "NotifyAccess=main", "FileDescriptorStoreMax=8192",
-		"FileDescriptorStorePreserve=yes", "RestartMode=direct", "RestartSec=100ms",
+		"FileDescriptorStorePreserve=yes", "RestartMode=direct", "RestartSec=2",
 		"RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX",
 	} {
 		if !strings.Contains(script, want) {
