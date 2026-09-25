@@ -68,6 +68,7 @@ type snapshot struct {
 // listenerState is one listener's sockets, by the names they are stored under,
 // and its tunnel.
 type listenerState struct {
+	Net    string        `json:"net"`
 	Bind   string        `json:"bind"`
 	TCP    string        `json:"tcp,omitempty"`
 	Bound  string        `json:"bound,omitempty"`
@@ -78,6 +79,7 @@ type listenerState struct {
 // relayState is one relay: a is the side that arrived — a player, or the previous
 // hop — and b the side this node opened.
 type relayState struct {
+	Net     string        `json:"net"`
 	Bind    string        `json:"bind"`
 	A       endState      `json:"a"`
 	B       endState      `json:"b"`
@@ -166,13 +168,13 @@ func (n *node) handoff(keep func([]byte, []handoff.File) error) error {
 	n.live.waitFor(sessions, time.Second)
 
 	for _, s := range n.servers {
-		ls := listenerState{Bind: s.Bind}
+		ls := listenerState{Net: s.Network(), Bind: s.Bind}
 		if s.tun != nil {
 			st, socks := s.tun.Freeze()
 			ls.Tunnel = &st
 			ls.Bound, ls.Dial = fs.add(socks.Bound), fs.add(socks.Dial)
 		}
-		if ln := n.byBind[s.Bind]; ln != nil {
+		if ln := n.byBind[s.Bind]; ln != nil && ls.Net == "tcp" {
 			ls.TCP = fs.add(ln)
 		}
 		snap.Listeners = append(snap.Listeners, ls)
@@ -259,7 +261,7 @@ func (fs *fileSet) close() {
 }
 
 func (fs *fileSet) relay(r *relayer, k *carry) (relayState, error) {
-	rs := relayState{Bind: k.bind, AB: flowOf(&r.ab), BA: flowOf(&r.ba), Start: k.start}
+	rs := relayState{Net: k.net, Bind: k.bind, AB: flowOf(&r.ab), BA: flowOf(&r.ba), Start: k.start}
 	var err error
 	if rs.A, err = fs.end(r.a); err != nil {
 		return rs, err
@@ -341,10 +343,14 @@ func readInherited(from *handoff.Inherited) *inherited {
 	}
 	for i := range in.snap.Listeners {
 		ls := &in.snap.Listeners[i]
-		in.binds[ls.Bind] = ls
+		in.binds[listenerKey(ls.Net, ls.Bind)] = ls
 	}
 	return in
 }
+
+// listenerKey is what a listener is known by across a handoff: its bind, and
+// whether it is TCP or UDP, since one of each may share a bind.
+func listenerKey(network, bind string) string { return network + " " + bind }
 
 // prune lets go of every inherited socket the new config will not take, before
 // anything is bound. A listener left in the store keeps its port, so a node that
@@ -359,8 +365,9 @@ func (in *inherited) prune(cfg *Config) {
 	keep := map[string]bool{}
 	binds := map[string]bool{}
 	for _, l := range cfg.Listeners {
-		binds[l.Bind] = true
-		if ls := in.binds[l.Bind]; ls != nil {
+		key := listenerKey(l.Network(), l.Bind)
+		binds[key] = true
+		if ls := in.binds[key]; ls != nil {
 			keep[ls.TCP], keep[ls.Bound], keep[ls.Dial] = true, true, true
 		}
 	}
@@ -368,7 +375,7 @@ func (in *inherited) prune(cfg *Config) {
 		keep[in.snap.Control] = true
 	}
 	for _, rs := range in.snap.Relays {
-		if binds[rs.Bind] {
+		if binds[listenerKey(rs.Net, rs.Bind)] {
 			keep[rs.A.FD], keep[rs.B.FD] = true, true
 		}
 	}
@@ -392,19 +399,22 @@ func (in *inherited) prune(cfg *Config) {
 	}
 }
 
-// tunnel is what a listener's tunnel resumes from, or nil to start clean.
-func (in *inherited) tunnel(bind string) *tunnel.Resume {
-	if in == nil {
+// tunnel is what a listener's tunnel resumes from, or nil to start clean. A
+// listener the new config gives no tunnel takes nothing, and what its old one
+// held is closed with everything else nobody claims.
+func (in *inherited) tunnel(l Listener) *tunnel.Resume {
+	if in == nil || len(l.Hops) == 0 && len(l.Peers) == 0 {
 		return nil
 	}
-	ls := in.binds[bind]
+	key := listenerKey(l.Network(), l.Bind)
+	ls := in.binds[key]
 	if ls == nil || ls.Tunnel == nil {
 		return nil
 	}
 	r := &tunnel.Resume{State: *ls.Tunnel, Attached: map[uint64]bool{}}
 	r.Bound, r.Dial = in.udp(ls.Bound), in.udp(ls.Dial)
 	for _, rs := range in.snap.Relays {
-		if rs.Bind != bind {
+		if listenerKey(rs.Net, rs.Bind) != key {
 			continue
 		}
 		for _, e := range []endState{rs.A, rs.B} {
@@ -460,7 +470,7 @@ func (in *inherited) listener(bind string) (*net.TCPListener, error) {
 		return nil, nil
 	}
 	name := ""
-	if ls := in.binds[bind]; ls != nil {
+	if ls := in.binds[listenerKey("tcp", bind)]; ls != nil {
 		name = ls.TCP
 	} else if bind == in.snap.ControlBind {
 		name = in.snap.Control
@@ -491,13 +501,13 @@ func (in *inherited) resume(servers []*server) []func() {
 	if in == nil {
 		return nil
 	}
-	byBind := map[string]*server{}
+	byKey := map[string]*server{}
 	for _, s := range servers {
-		byBind[s.Bind] = s
+		byKey[listenerKey(s.Network(), s.Bind)] = s
 	}
 	var out []func()
 	for _, rs := range in.snap.Relays {
-		s := byBind[rs.Bind]
+		s := byKey[listenerKey(rs.Net, rs.Bind)]
 		var a, b halfCloser
 		if s != nil {
 			a, b = in.end(s, rs.A), in.end(s, rs.B)
@@ -539,7 +549,7 @@ func (in *inherited) end(s *server, e endState) halfCloser {
 
 // resume is what starts one carried relay again, of whichever kind it was.
 func (s *server) resume(rs relayState, r *relayer) func() {
-	k := &carry{bind: s.Bind, start: rs.Start}
+	k := &carry{bind: s.Bind, net: s.Network(), start: rs.Start}
 	switch {
 	case rs.Session != nil:
 		c := r.a.(*net.TCPConn)

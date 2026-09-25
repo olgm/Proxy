@@ -119,8 +119,9 @@ What does not carry over:
   read, is not used: the node lets go of every socket in the store, starts clean
   on the same ports, and those sessions end, as in a restart. Rolling back across
   a change to the snapshot format therefore costs a restart. So does renaming a
-  listener's `bind`, even to the same address in another spelling: sockets are
-  matched to the config by that string.
+  listener's `bind`, even to the same address in another spelling, or moving a
+  route between TCP and UDP: sockets are matched to the config by that string and
+  by the listener's `net`.
 - `probed`, `proxybot` and `triald` are still restarted. None of them carries a
   player.
 

@@ -30,6 +30,7 @@ type admission struct{ c *net.TCPConn }
 // bytes: which listener it belongs to, and, for a login, the session.
 type carry struct {
 	bind  string
+	net   string
 	sess  *Session
 	rtt   *clientRTT
 	start time.Time

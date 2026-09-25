@@ -470,3 +470,70 @@ func TestHandoffStartsCleanOnTheSamePort(t *testing.T) {
 	}
 	c.Close()
 }
+
+// A TCP listener and a UDP one may share a bind, and a handoff has to tell them
+// apart. Known by the bind alone, the TCP listener took the UDP one's socket, and
+// the UDP one then failed to bind its own port on every start.
+func TestHandoffTellsTCPFromUDPOnOneBind(t *testing.T) {
+	useMojang(t, nil)
+	backend, _ := echoBackend(t)
+	addr := sharedPort(t)
+	cfg := &Config{Name: "ch", Listeners: []Listener{
+		{Bind: addr, Upstream: backend},
+		{Net: "udp", Bind: addr, Upstream: backend, Peers: []Link{{Addr: "127.0.0.1", Key: key()}}},
+	}}
+	n := mustStart(t, cfg)
+	n = handOver(t, n, cfg)
+	defer n.close()
+	if got := n.lns[0].Addr().String(); got != addr {
+		t.Fatalf("the TCP listener came back on %s, not %s", got, addr)
+	}
+	if got := n.servers[1].tun.Addr().String(); got != addr {
+		t.Fatalf("the UDP listener came back on %s, not %s", got, addr)
+	}
+}
+
+// A route whose transport changes keeps its binds, so a relay carried from a TCP
+// listener can meet a UDP one on the same bind. It is not that listener's to
+// carry on: it ends, and nothing is misread as a tunnel stream.
+func TestHandoffDoesNotCarryATCPRelayOntoAUDPListener(t *testing.T) {
+	useMojang(t, nil)
+	backend, _ := echoBackend(t)
+	addr := sharedPort(t)
+	tcp := &Config{Name: "ch", Listeners: []Listener{{Bind: addr, Upstream: backend}}}
+	n := mustStart(t, tcp)
+	c := dialIngress(t, addr, 764, mc.IntentLogin, loginStart("Notch", notchRaw[:]))
+	c.Write([]byte("ping"))
+	c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.ReadFull(c, make([]byte, 4)); err != nil {
+		t.Fatal(err)
+	}
+	udp := &Config{Name: "ch", Listeners: []Listener{{Net: "udp", Bind: addr, Upstream: backend,
+		Peers: []Link{{Addr: "127.0.0.1", Key: key()}}}}}
+	n = handOver(t, n, udp)
+	defer n.close()
+	c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := c.Read(make([]byte, 1)); err == nil {
+		t.Fatal("the relay was carried onto a listener of the other kind")
+	}
+}
+
+// sharedPort is a loopback address whose port is free for TCP and UDP alike.
+func sharedPort(t *testing.T) string {
+	t.Helper()
+	for range 20 {
+		u, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr := u.LocalAddr().String()
+		l, err := net.Listen("tcp", addr)
+		u.Close()
+		if err == nil {
+			l.Close()
+			return addr
+		}
+	}
+	t.Fatal("no port free for both TCP and UDP")
+	return ""
+}

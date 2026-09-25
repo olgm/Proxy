@@ -411,7 +411,7 @@ func build(cfg *Config, in *inherited) (*node, []func(), error) {
 		geo = ipinfo.New(ipinfo.DefaultURL)
 	}
 	for _, l := range cfg.Listeners {
-		s, err := newServerFrom(l, in.tunnel(l.Bind))
+		s, err := newServerFrom(l, in.tunnel(l))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -747,7 +747,7 @@ func (s *server) handle(c *net.TCPConn) {
 	}
 	defer u.Close()
 	r := newRelayer(c, u)
-	if !s.gate.start(a, r, &carry{bind: s.Bind}) {
+	if !s.gate.start(a, r, &carry{bind: s.Bind, net: s.Network()}) {
 		return
 	}
 	s.finishPlain(r)
@@ -898,7 +898,7 @@ func (s *server) serveLogin(c *net.TCPConn, br *bufio.Reader, h *mc.Handshake, a
 	// cuts off. Before replace, so a handoff that froze the node first cannot
 	// have this login end a session it is carrying.
 	r := newRelayer(c, u)
-	k := &carry{bind: s.Bind}
+	k := &carry{bind: s.Bind, net: s.Network()}
 	if !s.gate.start(a, r, k) {
 		return
 	}
@@ -1009,7 +1009,7 @@ func (s *server) serveStream(st *tunnel.Stream) {
 	defer u.Close()
 	r := newRelayer(st, u)
 	start := time.Now()
-	if !s.gate.start(a, r, &carry{bind: s.Bind, start: start}) {
+	if !s.gate.start(a, r, &carry{bind: s.Bind, net: s.Network(), start: start}) {
 		st.Halt()
 		return
 	}
