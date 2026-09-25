@@ -3,6 +3,11 @@
 //
 // `proxyd ctl` is the local client of the node's control link, for managing the
 // whitelist from the node itself; see ctl.go.
+//
+// SIGTERM ends every session and stops, which is what `systemctl stop` and
+// `restart` do. SIGUSR2 hands every session to the process systemd starts next and
+// exits without ending any: that is how a deploy replaces the binary under
+// players who are still playing. See internal/handoff and internal/proxy.
 package main
 
 import (
@@ -14,6 +19,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/olgm/proxy/internal/handoff"
 	"github.com/olgm/proxy/internal/proxy"
 	"github.com/olgm/proxy/internal/version"
 )
@@ -35,6 +41,16 @@ func main() {
 	// to be able to say which build failed.
 	log.Printf("proxyd %s", version.String())
 
+	// Whatever the last process handed on. It stays in systemd's store until
+	// this one is up, so a start that fails here is retried from the same place.
+	from, err := handoff.Take()
+	if err != nil {
+		log.Printf("%v; starting clean", err)
+	}
+	if from != nil {
+		log.Printf("handoff: took %d descriptor(s) from the last process", len(from.Names()))
+	}
+
 	cfg, err := readConfig(*path)
 	if err != nil {
 		log.Fatalf("%v", err)
@@ -50,8 +66,45 @@ func main() {
 		log.Printf("%v: ending sessions", <-sig)
 		close(stop)
 	}()
-	if err := proxy.Run(cfg, stop, nil); err != nil {
+
+	h := &proxy.Handoff{From: from, Ready: func() { ready(from) }}
+	hand := make(chan struct{})
+	// Caught whether or not a handoff is possible: left to its default, SIGUSR2
+	// kills the process, and every session with it, without a word.
+	usr := make(chan os.Signal, 1)
+	signal.Notify(usr, syscall.SIGUSR2)
+	go func() {
+		for range usr {
+			if !handoff.Available() {
+				log.Printf("SIGUSR2: no fd store to hand off to; carrying on (FileDescriptorStoreMax unset?)")
+				continue
+			}
+			close(hand)
+			return
+		}
+	}()
+	h.Signal, h.Keep = hand, handoff.Store
+	if err := proxy.Run(cfg, stop, h); err != nil {
 		log.Fatalf("%v", err)
+	}
+}
+
+// ready tells systemd the node is up, and lets go of what the last process left:
+// every descriptor in the store has a copy here now, and a copy left there would
+// keep a connection open after this process closed it.
+func ready(from *handoff.Inherited) {
+	status := "running"
+	if handoff.Available() {
+		// What proxyctl looks for before it sends SIGUSR2 rather than restarting.
+		status = "handoff ready"
+	}
+	if err := handoff.Ready(status); err != nil {
+		log.Printf("notify: %v", err)
+	}
+	if from != nil {
+		if err := handoff.Forget(from.Names()); err != nil {
+			log.Printf("handoff: forget: %v", err)
+		}
 	}
 }
 
