@@ -290,6 +290,10 @@ type Queue struct {
 	// of this queue is that a feed cannot hurt the thing it reports on.
 	mu     sync.RWMutex
 	closed bool
+	// detached says the queue is stopping to be carried on elsewhere: what it
+	// has not posted is handed back in left instead of being posted.
+	detached bool
+	left     []string
 
 	drops atomic.Int64
 	once  sync.Once
@@ -340,6 +344,26 @@ func (q *Queue) Close() {
 	<-q.done
 }
 
+// Detach stops the queue without posting and returns, in order, every line it
+// had not posted yet, for a process that carries on from this one to Send. It
+// waits at most d: a post already on its way to Discord is left to finish on its
+// own, and what was gathered behind it goes with the process. Nil if nothing was
+// waiting, or if the wait ran out.
+func (q *Queue) Detach(d time.Duration) []string {
+	q.once.Do(func() {
+		q.mu.Lock()
+		q.closed, q.detached = true, true
+		q.mu.Unlock()
+		close(q.stop)
+	})
+	select {
+	case <-q.done:
+		return q.left
+	case <-time.After(d):
+		return nil
+	}
+}
+
 func (q *Queue) run(flush time.Duration) {
 	defer close(q.done)
 	t := time.NewTicker(flush)
@@ -385,6 +409,24 @@ func (q *Queue) run(flush time.Duration) {
 		case <-t.C:
 			send()
 		case <-q.stop:
+			q.mu.RLock()
+			detached := q.detached
+			q.mu.RUnlock()
+			if detached {
+				for {
+					select {
+					case line := <-q.in:
+						buf = append(buf, line)
+						continue
+					default:
+					}
+					if d := q.drops.Swap(0); d > 0 {
+						buf = append(buf, fmt.Sprintf("_...and %d more that did not fit_", d))
+					}
+					q.left = buf
+					return
+				}
+			}
 			// Send is shut out by now, so what is in the channel is all there
 			// will ever be. Drain it rather than dropping a logout posted a
 			// moment before the node went down.

@@ -242,6 +242,25 @@ func TestCloseFlushesWhatWasQueued(t *testing.T) {
 	}
 }
 
+// A queue detached for a handoff posts nothing and hands back what it had, in
+// order, for the next process to send: posting it here and there would say it
+// twice, and dropping it would lose a logout.
+func TestDetachHandsBackWhatWasQueued(t *testing.T) {
+	c, url := newCapture(t)
+	q := NewQueue(url, 16, time.Hour)
+	q.Send("one")
+	q.Send("two")
+	left := q.Detach(time.Second)
+	if strings.Join(left, ",") != "one,two" {
+		t.Fatalf("handed back %q", left)
+	}
+	q.Send("after")
+	q.Close()
+	if all := c.sent(); len(all) != 0 {
+		t.Fatalf("a detached queue posted: %+v", all)
+	}
+}
+
 // A drop that happens while nothing else is queued still has to be reported on
 // its own: if the note only ever rode along with a message that was already
 // going out, a drop with nothing left to carry it — the sender busy, everything
