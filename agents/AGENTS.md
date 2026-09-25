@@ -38,6 +38,7 @@ Notes for agents working on this repo.
 | `internal/jsonl` | the rotating record file and its tail read: probed's dataset and proxyd's session log. |
 | `internal/window` | windowed aggregation and the percentiles over it. Was probed's stats.go; shared the moment a second service needed numbers comparable to probed's. |
 | `internal/webhook` | one Discord webhook client: content limit, 429s, mention suppression, one image attachment, delete, and a queue that coalesces and drops rather than blocking. stdlib only. |
+| `internal/handoff` | systemd's file descriptor store, spoken directly: store named sockets and an unlinked snapshot file, barrier, READY/STATUS, take them back as LISTEN_FDS, forget them. How a deploy moves a running proxyd's sessions into the next one. stdlib only. |
 | `internal/version` | the one version every binary here reports, and the commit `go build` stamps beside it. |
 | `internal/proxy` | listeners, allowlist, whitelist gate, relay over TCP or tunnel, the control server. |
 | `cmd/proxyd` | node runtime. Same binary on every node. `proxyd ctl` is the local control client. |
