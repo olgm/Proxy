@@ -1448,7 +1448,6 @@ ExecStart=/usr/local/bin/proxyd -c /etc/proxyd/config.json
 Restart=always
 RestartSec=100ms
 FileDescriptorStoreMax=8192
-FileDescriptorStorePreserve=yes
 TimeoutStopSec=15
 StateDirectory=proxyd
 NoNewPrivileges=true
@@ -1537,11 +1536,12 @@ if [ "$(systemctl is-active proxyd 2>/dev/null)" = active ] &&
       # Up after all, only late, and holding the sessions: leave it be.
       echo "handoff: sessions carried from pid $OLD to $NEW, late"
     else
-      # A new process lets go of the store only once it is ready, and the unit
-      # keeps the store even through a failed state, so the old binary can take
-      # it all back: put it and its config in place, stop whatever is starting,
-      # start again. A process that turns ready between the check above and the
-      # kill below is lost with its sessions; three seconds late makes that rare.
+      # A new process lets go of the store only once it is ready, and systemd
+      # keeps the store for as long as it means to restart the unit, so the old
+      # binary can take it all back: put it and its config in place, stop
+      # whatever is starting, start again. A process that turns ready between
+      # the check above and the kill below is lost with its sessions; three
+      # seconds late makes that rare.
       echo "handoff: the new proxyd did not come up; putting the old one back"
       restore
       [ "$NEW" = 0 ] || $SUDO kill -KILL "$NEW" 2>/dev/null || true

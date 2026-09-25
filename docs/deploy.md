@@ -107,8 +107,10 @@ the old binary and config put back.
 that prints only `active` is running a `proxyd` from before this, or was started
 without the fd store; the next deploy restarts it, disconnecting everyone on it one
 last time, and every deploy after that is a handoff. The unit needs systemd 254 or
-newer for `FileDescriptorStorePreserve=`; every node runs 255 or
-259.
+newer, which sets the `$FDSTORE` that tells `proxyd` it can hand off; every node
+runs 255 or 259. systemd keeps the store only while it means to restart the unit,
+so `systemctl stop` closes whatever it holds, and those players are disconnected
+like any others.
 
 What does not carry over:
 
