@@ -13,7 +13,9 @@
   every leg they answer read 100% loss after the deploy, while `au>ch` and `hk>ty2`
   stayed clean. The deploy's check reported four of those legs as blocked ports,
   because for UDP it waits for probed's own `link up` line, which a stale answerer
-  never lets happen.
+  never lets happen. Restarting probed on ch2 and then ch at 14:21Z cleared it: the
+  next full minute read 0% loss on every leg and chain, those four included, so no
+  port was ever blocked.
 
 ## v2.4.0 — 2026-09-26
 
