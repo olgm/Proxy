@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- **v2.4.0 reached every node** between 14:05Z and 14:11Z on 2026-09-26. Status
+  pings a minute before it began found nobody on any entry. As its own entry says,
+  this deploy still restarted every node; all six now report `handoff ready`.
+  Every entry now asks ipinfo.io where its players' networks are (`"ipinfo": true`),
+  and answers the server list with the listing it has always shown, favicon
+  included, now read from a `motd.json` instead of built in. Status pings to all
+  five matched that file before and after.
+- **The probe answerer's stale state came back on ch and ch2**, as on 2026-09-20:
+  every leg they answer read 100% loss after the deploy, while `au>ch` and `hk>ty2`
+  stayed clean. The deploy's check reported four of those legs as blocked ports,
+  because for UDP it waits for probed's own `link up` line, which a stale answerer
+  never lets happen.
+
 ## v2.4.0 — 2026-09-26
 
 A deploy no longer disconnects anyone: a running `proxyd` hands its sockets and
