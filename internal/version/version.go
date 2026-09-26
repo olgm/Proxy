@@ -16,7 +16,7 @@ package version
 import "runtime/debug"
 
 // V is bumped by editing this line.
-const V = "2.3.4"
+const V = "2.4.0"
 
 // String renders the version with the revision it was built from: "v2.1.0
 // (733d62d)", or "v2.1.0 (733d62d, dirty)" when the tree had uncommitted changes

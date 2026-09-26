@@ -1,15 +1,19 @@
 # Changelog
 
-## Unreleased
+## v2.4.0 — 2026-09-26
 
-The night v1 is switched off. No binary changed — the code here is v2.3.4,
-deployed at last — but the fleet is no longer the one v2.3.4 described, and none of
+A deploy no longer disconnects anyone: a running `proxyd` hands its sockets and
+sessions to the new one. Every session now records the player's own leg of the
+ping and, where the operator turns it on, where their network is. The tunnel's two
+test flakes were real bugs and are fixed. This is the first release since the
+repository was opened. Its own first deploy still restarts every node, because the
+build it replaces cannot hand off.
+
+The bullets from "v1 stopped accepting new connections" on record the fleet rather
+than the code: the night v1 was switched off, 2026-09-20, and what the nodes did
+after. No binary changed then — the code was v2.3.4, deployed at last — and none of
 what changed lives in the repo: `topology.json`, `whitelist.txt`, `trial.json` and
-two nat tables. As with v2.3.1, this entry is the only place the change leaves a
-mark.
-
-The session record and the way a deploy replaces `proxyd` have changed since, in
-code that is not deployed yet: the first bullets below.
+two nat tables. As with v2.3.1, this file is the only place it leaves a mark.
 
 - **A deploy no longer disconnects anyone.** `proxyctl deploy` sends a running
   `proxyd` that reports `handoff ready` a `SIGUSR2` instead of restarting it. It stops
